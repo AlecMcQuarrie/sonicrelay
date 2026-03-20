@@ -41,7 +41,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           enableSystem
           disableTransitionOnChange
         >
-          <ModeToggle/>
+          <div className="fixed top-4 right-4">
+            <ModeToggle/>
+          </div>
           {children}
         </ThemeProvider>
           <ScrollRestoration />
