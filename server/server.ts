@@ -9,12 +9,22 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 const db = new Database();
+
 type User = {
   username: string;
   password: string;
-  $id: number;
+  $id: string;
 };
 const Users = db.createCollection<User>("users");
+
+type Message = {
+  attachments: Blob[];
+  messageContent: string;
+  sender: string;
+  timestamp: string;
+  $id: string;
+};
+const Messages = db.createCollection<Message>("messages");
 
 app.use(express.json());
 
