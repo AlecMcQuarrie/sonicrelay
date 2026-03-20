@@ -28,7 +28,8 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
 
   return (
     <div className="max-w-sm m-auto flex flex-col h-screen justify-center">
-      <Card>
+      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px"}}><strong>WELCOME TO RIPCORD</strong></h1>
+      <Card style={{ textAlign: 'center' }}>
         <CardHeader>
           <CardTitle>Login to The Server</CardTitle>
           <CardDescription>Enter Server Details to Login</CardDescription>
@@ -54,6 +55,7 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
               </Field>
               <Field>
                 <Input
+                  type="password"
                   placeholder="Password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
