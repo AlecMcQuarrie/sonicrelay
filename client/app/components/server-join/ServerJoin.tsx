@@ -12,7 +12,7 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
   const [password, setPassword] = useState<string>("");
 
   return (
-    <div className="max-w-sm m-auto">
+    <div className="max-w-sm m-auto flex flex-col h-screen justify-center">
       <h1>Server info</h1>
       <Input
         placeholder="Server IP"
