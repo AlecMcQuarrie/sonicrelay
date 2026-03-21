@@ -1,10 +1,15 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const WebSocket = require('ws');
 
 import express, { Request, Response } from "express";
 import { Database } from "simpl.db";
+import { WebSocketServer } from 'ws';
+import { IncomingMessage } from 'http';
 import "dotenv/config";
+
+type RipV2IncomingMessage = IncomingMessage & {
+  username?: string;
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -80,7 +85,7 @@ app.post("/login", async (req: Request, res: Response) => {
 });
 
 app.post("/me", (req: Request, res: Response) => {
-  const { accessToken } = req.body;
+  const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
     return res.status(200).json({ username });
@@ -89,7 +94,8 @@ app.post("/me", (req: Request, res: Response) => {
 });
 
 app.post("/message", (req: Request, res: Response) => {
-  const { accessToken, messageContent } = req.body;
+  const accessToken = req.headers["access-token"];
+  const { messageContent } = req.body;
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
     Messages.create({
@@ -103,7 +109,7 @@ app.post("/message", (req: Request, res: Response) => {
 });
 
 app.get("/messages", (req: Request, res: Response) => {
-  const { accessToken, messageContent } = req.body;
+  const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
     const messages = Messages.getAll();
@@ -113,23 +119,34 @@ app.get("/messages", (req: Request, res: Response) => {
 });
 
 // Websockets for real time communication
-const wss = new WebSocket.Server({ port: 8080 });
+const wss = new WebSocketServer({
+  port: 8080, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
+    const accessToken = info.req.headers["access-token"];
+    const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+    if (username) {
+      info.req.username = username;
+      authenticate(true);
+      return;
+    }
+    authenticate(false, 401);
+    return;
+  }
+});
 
-wss.on('connection', (ws: any) => {
-  console.log('New client connected');
+wss.on('connection', (ws, req: RipV2IncomingMessage) => {
+  const { username } = req;
 
-  // Send a welcome message to the client
-  ws.send('Welcome to the WebSocket server!');
-
-  // Message event handler
-  ws.on('message', (message: any) => {
-    console.log(`Received: ${message}`);
-    // Echo the message back to the client
-    ws.send(`Server received: ${message}`);
-  });
-
-  // Close event handler
-  ws.on('close', () => {
-    console.log('Client disconnected');
+  ws.on('message', (data) => {
+    const messageContent = JSON.parse(data.toString());
+    Messages.create({
+      messageContent,
+      timestamp: new Date().toISOString(),
+      sender: username,
+    });
+    wss.clients.forEach((client) => {
+      if (client !== ws) {
+        client.send(data)
+      }
+    })
   });
 });
