@@ -86,3 +86,27 @@ app.post("/me", (req: Request, res: Response) => {
   }
   return res.sendStatus(401);
 });
+
+app.post("/message", (req: Request, res: Response) => {
+  const { accessToken, messageContent } = req.body;
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (username) {
+    Messages.create({
+      messageContent,
+      timestamp: new Date().toISOString(),
+      sender: username,
+    });
+    return res.sendStatus(200);
+  }
+  return res.sendStatus(401);
+});
+
+app.get("/messages", (req: Request, res: Response) => {
+  const { accessToken, messageContent } = req.body;
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (username) {
+    const messages = Messages.getAll();
+    return res.status(200).json({ messages });
+  }
+  return res.sendStatus(401);
+});
