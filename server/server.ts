@@ -1,5 +1,6 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const WebSocket = require('ws');
 
 import express, { Request, Response } from "express";
 import { Database } from "simpl.db";
@@ -109,4 +110,26 @@ app.get("/messages", (req: Request, res: Response) => {
     return res.status(200).json({ messages });
   }
   return res.sendStatus(401);
+});
+
+// Websockets for real time communication
+const wss = new WebSocket.Server({ port: 8080 });
+
+wss.on('connection', (ws: any) => {
+  console.log('New client connected');
+
+  // Send a welcome message to the client
+  ws.send('Welcome to the WebSocket server!');
+
+  // Message event handler
+  ws.on('message', (message: any) => {
+    console.log(`Received: ${message}`);
+    // Echo the message back to the client
+    ws.send(`Server received: ${message}`);
+  });
+
+  // Close event handler
+  ws.on('close', () => {
+    console.log('Client disconnected');
+  });
 });
