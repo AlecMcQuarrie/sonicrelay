@@ -35,7 +35,7 @@ const Messages = db.createCollection<Message>("messages");
 app.use(express.json());
 
 // Server start
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`RipV2 server started at http://localhost:${port}`);
 });
 
@@ -120,7 +120,7 @@ app.get("/messages", (req: Request, res: Response) => {
 
 // Websockets for real time communication
 const wss = new WebSocketServer({
-  port: 8080, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
+  server, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
     const accessToken = info.req.headers["access-token"];
     const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
     if (username) {
