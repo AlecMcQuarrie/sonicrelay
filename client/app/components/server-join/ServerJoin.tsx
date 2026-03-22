@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { Label } from "~/components/ui/label";
 import {
   Card,
   CardContent,
@@ -13,11 +12,10 @@ import {
   Field,
   FieldDescription,
   FieldGroup,
-  FieldLabel,
 } from "~/components/ui/field";
 
 interface ServerJoinProps {
-  submitForm: (serverIP: string, username: string, password: string) => void;
+  submitForm: (serverIP: string, username: string, password: string, isRegistration: boolean) => void;
 }
 
 export default function ServerJoin({ submitForm }: ServerJoinProps) {
@@ -28,7 +26,7 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
 
   return (
     <div className="max-w-sm m-auto flex flex-col h-screen justify-center">
-      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px"}}><strong>WELCOME TO RIPCORD</strong></h1>
+      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px" }}><strong>WELCOME TO RIPCORD</strong></h1>
       <Card style={{ textAlign: 'center' }}>
         <CardHeader>
           <CardTitle>Login to The Server</CardTitle>
@@ -64,7 +62,10 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
               </Field>
               {signupMode ? (
                 <Field>
-                  <Button type="submit">Sign Up</Button>
+                  <Button disabled={!serverIP || !username || !password} onClick={(e) => {
+                    e.preventDefault();
+                    submitForm(serverIP, username, password, signupMode)
+                  }}>Sign Up</Button>
                   <FieldDescription className="text-center">
                     Already have an account?{" "}
                     <a onClick={() => setSignupMode(false)}>Login</a>
@@ -72,7 +73,10 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
                 </Field>
               ) : (
                 <Field>
-                  <Button type="submit">Login</Button>
+                  <Button disabled={!serverIP || !username || !password} onClick={(e) => {
+                    e.preventDefault();
+                    submitForm(serverIP, username, password, signupMode)
+                  }}>Login</Button>
                   <FieldDescription className="text-center">
                     Don&apos;t have an account?{" "}
                     <a onClick={() => setSignupMode(true)}>Sign up</a>

@@ -32,6 +32,13 @@ type Message = {
 };
 const Messages = db.createCollection<Message>("messages");
 
+const cors = require('cors');
+app.use(cors({ origin: 'http://localhost:5173' }));
+
+// parse application/x-www-form-urlencoded
+app.use(express.urlencoded({ extended: true }));
+
+// parse application/json
 app.use(express.json());
 
 // Server start
@@ -51,15 +58,19 @@ app.post("/signup", async (req: Request, res: Response) => {
   }
 
   // Create user and hash password
-  const password = await bcrypt.hash(req.body.password, process.env.SALT);
+  const password = await bcrypt.hash(req.body.password, +(process.env.SALT || 12));
+
   const user = {
     username: req.body.username,
     password: password,
   };
   Users.create(user);
 
-  // Send 200 if successful
-  return res.sendStatus(200);
+  const token = jwt.sign(
+    { username: user.username },
+    process.env.ENCRYPTION_KEY,
+  );
+  return res.status(200).json({ accessToken: token });
 });
 
 app.post("/login", async (req: Request, res: Response) => {
