@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import TextChannel from "~/components/text-channel/TextChannel";
+import UserList from "~/components/user-list/UserList";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { VoiceClient } from "~/lib/voice";
 
@@ -23,6 +24,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
   const [isMuted, setIsMuted] = useState(false);
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
+  const [allUsers, setAllUsers] = useState<string[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
 
@@ -39,6 +42,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         setChannels(data.channels);
         const firstText = data.channels.find((c: Channel) => c.type === "text");
         if (firstText) setSelectedTextChannelId(firstText.__id);
+      });
+
+    fetch(`${protocol}://${serverIP}/users`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setAllUsers(data.users.map((u: { username: string }) => u.username));
       });
 
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
@@ -69,14 +80,17 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       },
     });
 
-    // Handle initial voice state from server
-    const handleVoiceState = (event: MessageEvent) => {
+    // Handle server pushes for voice state and presence
+    const handleServerMessages = (event: MessageEvent) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'voice-state') {
         setVoicePeers(msg.voicePeers);
       }
+      if (msg.type === 'presence') {
+        setOnlineUsers(new Set(msg.onlineUsers));
+      }
     };
-    ws.addEventListener('message', handleVoiceState);
+    ws.addEventListener('message', handleServerMessages);
 
     return () => {
       voiceRef.current?.leave();
@@ -142,6 +156,9 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           Select a channel
         </div>
       )}
+      <div className="w-52 border-l h-screen">
+        <UserList users={allUsers} onlineUsers={onlineUsers} />
+      </div>
     </div>
   );
 }

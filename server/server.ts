@@ -139,6 +139,17 @@ app.post("/channels", (req: Request, res: Response) => {
   return res.sendStatus(401);
 });
 
+// Users endpoint
+app.get("/users", (req: Request, res: Response) => {
+  const accessToken = req.headers["access-token"];
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (username) {
+    const users = Users.getAll().map((u) => ({ username: u.username }));
+    return res.status(200).json({ users });
+  }
+  return res.sendStatus(401);
+});
+
 // Message endpoint
 app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   const accessToken = req.headers["access-token"];
@@ -171,6 +182,20 @@ function getVoicePeers(): Record<string, string[]> {
     }
   }
   return peers;
+}
+
+// Get unique online usernames
+function getOnlineUsernames(): string[] {
+  const names = new Set<string>();
+  for (const client of clients.values()) {
+    names.add(client.username);
+  }
+  return [...names];
+}
+
+// Broadcast current online users to all clients
+function broadcastPresence() {
+  broadcastToAll({ type: 'presence', onlineUsers: getOnlineUsernames() });
 }
 
 // Broadcast to all connected clients
@@ -232,6 +257,9 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
   // Send current voice state on connect
   ws.send(JSON.stringify({ type: 'voice-state', voicePeers: getVoicePeers() }));
 
+  // Notify all clients of updated online users
+  broadcastPresence();
+
   // Clean up on disconnect
   ws.on('close', () => {
     const client = clients.get(ws);
@@ -248,6 +276,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       });
     }
     clients.delete(ws);
+    broadcastPresence();
   });
 
   // Handle incoming messages
