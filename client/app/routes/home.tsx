@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Route } from "./+types/home";
 import ServerJoin from "~/components/server-join/ServerJoin";
+import Server from "~/components/server/Server";
 
 export function meta({ }: Route.MetaArgs) {
   return [
@@ -31,7 +32,7 @@ export default function Home() {
   }, []);
 
   const joinServer = useCallback(async (serverIP: string, username: string, password: string, isRegistration: boolean) => {
-    const response = await fetch(`http://localhost:3000/${isRegistration ? 'signup' : 'login'}`, {
+    const response = await fetch(`http://${serverIP}/${isRegistration ? 'signup' : 'login'}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -59,9 +60,11 @@ export default function Home() {
     return <ServerJoin submitForm={joinServer}></ServerJoin>;
   } else {
     return (
-      <>
-        <h1>hi</h1>
-      </>
+      <Server
+        serverIP={connectionData.serverIP}
+        accessToken={connectionData.accessToken}
+        username={connectionData.username}
+      />
     );
   }
 }
