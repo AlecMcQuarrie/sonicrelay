@@ -97,13 +97,12 @@ export default function ChannelSidebar({
               <Volume2 className="w-4 h-4 mr-1" />
               {channel.name}
             </Button>
-            {voicePeers[channel.__id]?.map((user) => (
+            {voicePeers[channel.__id]?.sort().map((user) => (
               <div key={user}>
                 <div className="py-1 text-sm text-muted-foreground flex items-center gap-2">
                   <span
-                    className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${
-                      speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
-                    }`}
+                    className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
+                      }`}
                   />
                   <span className="flex-1 truncate">{user}</span>
                   {peerPings[user] !== undefined && (
