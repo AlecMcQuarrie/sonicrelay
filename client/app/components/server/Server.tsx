@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import TextChannel from "~/components/text-channel/TextChannel";
 import UserList from "~/components/user-list/UserList";
-import VideoGrid from "~/components/video-grid/VideoGrid";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { VoiceClient } from "~/lib/voice";
 
@@ -25,6 +24,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
   const [isMuted, setIsMuted] = useState(false);
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
+  const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
   const [allUsers, setAllUsers] = useState<string[]>([]);
@@ -100,6 +100,9 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       if (msg.type === 'presence') {
         setOnlineUsers(new Set(msg.onlineUsers));
       }
+      if (msg.type === 'voice-pings') {
+        setPeerPings(msg.pings);
+      }
     };
     ws.addEventListener('message', handleServerMessages);
 
@@ -152,6 +155,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           voiceChannelId={voiceChannelId}
           voicePeers={voicePeers}
           speakingUsers={speakingUsers}
+          peerPings={peerPings}
+          videoTracks={videoTracks}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
         />
@@ -166,7 +171,6 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           />
         )}
       </div>
-      <VideoGrid videoTracks={videoTracks} localUsername={username} />
       {selectedTextChannel ? (
         <TextChannel
           serverIP={serverIP}

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
 import { Hash, Volume2 } from "lucide-react";
@@ -14,8 +15,36 @@ interface ChannelSidebarProps {
   voiceChannelId: string | null;
   voicePeers: Record<string, string[]>;
   speakingUsers: Set<string>;
+  peerPings: Record<string, number>;
+  videoTracks: Map<string, MediaStreamTrack>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
+}
+
+function pingColor(ms: number): string {
+  if (ms < 80) return "text-green-500";
+  if (ms < 150) return "text-yellow-500";
+  return "text-red-500";
+}
+
+function PeerVideo({ track }: { track: MediaStreamTrack }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    videoRef.current.srcObject = new MediaStream([track]);
+  }, [track]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      className="ml-8 mr-2 rounded bg-black"
+      style={{ maxWidth: "calc(100% - 2.5rem)" }}
+    />
+  );
 }
 
 export default function ChannelSidebar({
@@ -24,6 +53,8 @@ export default function ChannelSidebar({
   voiceChannelId,
   voicePeers,
   speakingUsers,
+  peerPings,
+  videoTracks,
   onSelectTextChannel,
   onJoinVoiceChannel,
 }: ChannelSidebarProps) {
@@ -66,16 +97,23 @@ export default function ChannelSidebar({
               {channel.name}
             </Button>
             {voicePeers[channel.__id]?.map((user) => (
-              <div
-                key={user}
-                className="pl-8 py-1 text-sm text-muted-foreground flex items-center gap-2"
-              >
-                <span
-                  className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${
-                    speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
-                  }`}
-                />
-                {user}
+              <div key={user}>
+                <div className="pl-8 py-1 text-sm text-muted-foreground flex items-center gap-2">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${
+                      speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
+                    }`}
+                  />
+                  <span className="flex-1 truncate">{user}</span>
+                  {peerPings[user] !== undefined && (
+                    <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
+                      {peerPings[user]}ms
+                    </span>
+                  )}
+                </div>
+                {videoTracks.has(user) && (
+                  <PeerVideo track={videoTracks.get(user)!} />
+                )}
               </div>
             ))}
           </div>

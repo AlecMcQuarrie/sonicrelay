@@ -232,17 +232,38 @@ const wss = new WebSocketServer({
   }
 });
 
-// Ping all clients every 25 seconds to keep connections alive through proxies
-const PING_INTERVAL = 25000;
+// Ping measurement: track round-trip time per client
+const clientPings = new Map<WebSocket, number>(); // ws -> latency in ms
+
+// Build a username -> ping map for all voice-connected users
+function getVoicePings(): Record<string, number> {
+  const pings: Record<string, number> = {};
+  for (const [ws, client] of clients) {
+    if (client.voiceChannelId) {
+      const ping = clientPings.get(ws);
+      if (ping !== undefined) pings[client.username] = ping;
+    }
+  }
+  return pings;
+}
+
+// Ping all clients every 5 seconds, measure latency, broadcast to voice peers
+const PING_INTERVAL = 5000;
 const pingInterval = setInterval(() => {
   for (const [ws, client] of clients) {
     if ((ws as any).isAlive === false) {
-      // Didn't respond to last ping — connection is dead
       ws.terminate();
       continue;
     }
     (ws as any).isAlive = false;
+    (ws as any).pingSentAt = Date.now();
     ws.ping();
+  }
+
+  // Broadcast current pings to everyone in voice
+  const pings = getVoicePings();
+  if (Object.keys(pings).length > 0) {
+    broadcastToAll({ type: 'voice-pings', pings });
   }
 }, PING_INTERVAL);
 
@@ -251,7 +272,12 @@ wss.on('close', () => clearInterval(pingInterval));
 wss.on('connection', (ws, req: RipV2IncomingMessage) => {
   const username = req.username!;
   (ws as any).isAlive = true;
-  ws.on('pong', () => { (ws as any).isAlive = true; });
+  ws.on('pong', () => {
+    (ws as any).isAlive = true;
+    if ((ws as any).pingSentAt) {
+      clientPings.set(ws, Date.now() - (ws as any).pingSentAt);
+    }
+  });
   clients.set(ws, { username, voiceChannelId: null });
 
   // Send current voice state on connect
@@ -276,6 +302,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       });
     }
     clients.delete(ws);
+    clientPings.delete(ws);
     broadcastPresence();
   });
 
