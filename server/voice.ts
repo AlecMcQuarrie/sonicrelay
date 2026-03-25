@@ -152,6 +152,18 @@ export async function consume(
   };
 }
 
+// Close a single producer (e.g. when a user turns off their camera)
+export function closeProducer(channelId: string, username: string, producerId: string) {
+  const peer = rooms.get(channelId)?.peers.get(username);
+  if (!peer) throw new Error('Peer not found');
+
+  const producer = peer.producers.get(producerId);
+  if (!producer) throw new Error('Producer not found');
+
+  producer.close();
+  peer.producers.delete(producerId);
+}
+
 // Leave a voice channel - returns closed producer IDs for notification
 export function leave(channelId: string, username: string): string[] {
   const room = rooms.get(channelId);

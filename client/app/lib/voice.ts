@@ -292,7 +292,14 @@ export class VoiceClient {
   }
 
   async stopVideo() {
-    if (!this.videoProducer) return;
+    if (!this.videoProducer || !this.channelId) return;
+
+    // Tell the server to close this producer and notify other peers
+    const producerId = this.videoProducer.id;
+    try {
+      await request(this.ws, 'close-producer', { channelId: this.channelId, producerId });
+    } catch {}
+
     this.videoProducer.close();
     this.videoProducer = null;
 

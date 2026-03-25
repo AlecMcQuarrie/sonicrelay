@@ -351,6 +351,15 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
             respond(result);
             break;
           }
+          case 'close-producer': {
+            voice.closeProducer(msg.channelId, username, msg.producerId);
+            respond({});
+            broadcastToVoiceChannel(msg.channelId, {
+              type: 'voice-notification', action: 'producer-closed',
+              producerId: msg.producerId,
+            }, ws);
+            break;
+          }
           case 'leave': {
             const closedProducerIds = voice.leave(msg.channelId, username);
             const client = clients.get(ws);

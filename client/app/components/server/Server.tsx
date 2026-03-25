@@ -166,23 +166,21 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           />
         )}
       </div>
-      <div className="flex-1 flex flex-col h-screen">
-        <VideoGrid videoTracks={videoTracks} localUsername={username} />
-        {selectedTextChannel ? (
-          <TextChannel
-            serverIP={serverIP}
-            channelId={selectedTextChannel.__id}
-            channelName={selectedTextChannel.name}
-            accessToken={accessToken}
-            username={username}
-            wsRef={wsRef}
-          />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground">
-            Select a channel
-          </div>
-        )}
-      </div>
+      <VideoGrid videoTracks={videoTracks} localUsername={username} />
+      {selectedTextChannel ? (
+        <TextChannel
+          serverIP={serverIP}
+          channelId={selectedTextChannel.__id}
+          channelName={selectedTextChannel.name}
+          accessToken={accessToken}
+          username={username}
+          wsRef={wsRef}
+        />
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          Select a channel
+        </div>
+      )}
       <div className="w-52 border-l h-screen">
         <UserList users={allUsers} onlineUsers={onlineUsers} />
       </div>
