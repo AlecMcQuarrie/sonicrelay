@@ -146,19 +146,21 @@ PORT_VAL=${PORT_VAL:-3000}
 
 if command -v ufw &> /dev/null; then
   echo "Configuring UFW firewall..."
+  sudo ufw allow 22/tcp comment "SSH"
   sudo ufw allow "$PORT_VAL"/tcp comment "RipV2 server"
   sudo ufw allow 10000:10100/udp comment "RipV2 mediasoup WebRTC"
   sudo ufw --force enable
   echo "Firewall rules added."
 elif command -v firewall-cmd &> /dev/null; then
   echo "Configuring firewalld..."
+  sudo firewall-cmd --permanent --add-port=22/tcp
   sudo firewall-cmd --permanent --add-port="$PORT_VAL"/tcp
   sudo firewall-cmd --permanent --add-port=10000-10100/udp
   sudo firewall-cmd --reload
   echo "Firewall rules added."
 else
   echo "No supported firewall found. Please manually open these ports:"
-  echo "  TCP: $PORT_VAL"
+  echo "  TCP: 22, $PORT_VAL"
   echo "  UDP: 10000-10100"
 fi
 
