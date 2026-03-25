@@ -18,6 +18,7 @@ interface ChannelSidebarProps {
   peerPings: Record<string, number>;
   videoTracks: Map<string, MediaStreamTrack>;
   screenTracks: Map<string, MediaStreamTrack>;
+  focusedFeeds: Set<string>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
   onFocusVideo: (key: string) => void;
@@ -59,6 +60,7 @@ export default function ChannelSidebar({
   peerPings,
   videoTracks,
   screenTracks,
+  focusedFeeds,
   onSelectTextChannel,
   onJoinVoiceChannel,
   onFocusVideo,
@@ -115,10 +117,10 @@ export default function ChannelSidebar({
                     </span>
                   )}
                 </div>
-                {videoTracks.has(user) && (
+                {videoTracks.has(user) && !focusedFeeds.has(`camera:${user}`) && (
                   <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(`camera:${user}`)} />
                 )}
-                {screenTracks.has(user) && (
+                {screenTracks.has(user) && !focusedFeeds.has(`screen:${user}`) && (
                   <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
                 )}
               </div>

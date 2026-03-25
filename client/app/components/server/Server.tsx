@@ -200,6 +200,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           peerPings={peerPings}
           videoTracks={videoTracks}
           screenTracks={screenTracks}
+          focusedFeeds={focusedVideoUsers}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
           onFocusVideo={(user) => {

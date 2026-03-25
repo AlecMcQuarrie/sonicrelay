@@ -25,10 +25,10 @@ export default function VoiceControls({
           {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleCamera}>
-          {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+          {isCameraOn ? <Video className="w-4 h-4 text-red-500" /> : <VideoOff className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleScreenShare}>
-          {isScreenSharing ? <ScreenShare className="w-4 h-4" /> : <ScreenShareOff className="w-4 h-4" />}
+          {isScreenSharing ? <ScreenShareOff className="w-4 h-4 text-red-500" /> : <ScreenShare className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onDisconnect}>
           <PhoneOff className="w-4 h-4" />
