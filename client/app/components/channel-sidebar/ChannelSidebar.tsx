@@ -36,14 +36,15 @@ function PeerVideo({ track }: { track: MediaStreamTrack }) {
   }, [track]);
 
   return (
-    <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      muted
-      className="ml-8 mr-2 rounded bg-black"
-      style={{ maxWidth: "calc(100% - 2.5rem)" }}
-    />
+    <div className="aspect-video bg-black rounded overflow-hidden">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="w-full h-full object-cover"
+      />
+    </div>
   );
 }
 
@@ -98,7 +99,7 @@ export default function ChannelSidebar({
             </Button>
             {voicePeers[channel.__id]?.map((user) => (
               <div key={user}>
-                <div className="pl-8 py-1 text-sm text-muted-foreground flex items-center gap-2">
+                <div className="py-1 text-sm text-muted-foreground flex items-center gap-2">
                   <span
                     className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${
                       speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
