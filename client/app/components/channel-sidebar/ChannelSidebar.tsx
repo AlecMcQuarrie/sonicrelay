@@ -68,13 +68,11 @@ export default function ChannelSidebar({
             {voicePeers[channel.__id]?.map((user) => (
               <div
                 key={user}
-                className={`pl-8 py-1 text-sm flex items-center gap-2 ${
-                  speakingUsers.has(user) ? "text-green-400" : "text-muted-foreground"
-                }`}
+                className="pl-8 py-1 text-sm text-muted-foreground flex items-center gap-2"
               >
                 <span
-                  className={`inline-block w-2 h-2 rounded-full ${
-                    speakingUsers.has(user) ? "bg-green-400" : "bg-muted-foreground/40"
+                  className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${
+                    speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"
                   }`}
                 />
                 {user}

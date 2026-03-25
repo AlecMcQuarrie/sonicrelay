@@ -123,7 +123,6 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           <VoiceControls
             channelName={currentVoiceChannel.name}
             isMuted={isMuted}
-            isSpeaking={speakingUsers.has(username)}
             onToggleMute={toggleMute}
             onDisconnect={leaveVoiceChannel}
           />

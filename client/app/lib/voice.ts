@@ -77,6 +77,10 @@ export class VoiceClient {
     if (username) this.localUsername = username;
     this.device = new Device();
     this.audioContext = new AudioContext();
+    // Browsers may start AudioContext in suspended state — resume it
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
 
     // Get router capabilities and join the room
     const joinResult = await request(this.ws, 'join', { channelId });
@@ -197,18 +201,22 @@ export class VoiceClient {
   }
 
   private startLevelMonitoring() {
-    const SPEAKING_THRESHOLD = 15; // audio level 0-255
-    const dataArray = new Uint8Array(128);
+    const SPEAKING_THRESHOLD = 10; // RMS deviation from silence (0-128 scale)
+    const bufferLength = 256; // matches fftSize on our analysers
+    const dataArray = new Uint8Array(bufferLength);
 
     this.levelCheckInterval = setInterval(() => {
       for (const [username, analyser] of this.analysers) {
-        analyser.getByteFrequencyData(dataArray);
-        // Average the frequency data to get an overall level
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        const average = sum / dataArray.length;
+        analyser.getByteTimeDomainData(dataArray);
+        // Calculate RMS deviation from silence (128 = silence center)
+        let sumSquares = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const deviation = dataArray[i] - 128;
+          sumSquares += deviation * deviation;
+        }
+        const rms = Math.sqrt(sumSquares / dataArray.length);
 
-        const isSpeaking = average > SPEAKING_THRESHOLD;
+        const isSpeaking = rms > SPEAKING_THRESHOLD;
         const wasSpeaking = this.speakingState.get(username) ?? false;
         if (isSpeaking !== wasSpeaking) {
           this.speakingState.set(username, isSpeaking);
