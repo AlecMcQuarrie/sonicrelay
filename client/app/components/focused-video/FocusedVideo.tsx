@@ -8,6 +8,13 @@ interface FocusedVideoProps {
   onCloseAll: () => void;
 }
 
+function parseLabel(key: string): string {
+  const [source, ...rest] = key.split(':');
+  const user = rest.join(':');
+  if (source === 'screen') return `${user} (screen)`;
+  return user;
+}
+
 function VideoTile({ username, track, onRemove }: { username: string; track: MediaStreamTrack; onRemove: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -17,7 +24,7 @@ function VideoTile({ username, track, onRemove }: { username: string; track: Med
   }, [track]);
 
   return (
-    <div className="relative bg-black rounded-lg overflow-hidden">
+    <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
       <video
         ref={videoRef}
         autoPlay
@@ -26,7 +33,7 @@ function VideoTile({ username, track, onRemove }: { username: string; track: Med
         className="w-full h-full object-cover"
       />
       <div className="absolute bottom-1 left-2 text-white text-xs bg-black/60 px-1.5 py-0.5 rounded">
-        {username}
+        {parseLabel(username)}
       </div>
       <button
         className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center rounded bg-black/60 text-white hover:bg-black/80"
@@ -53,7 +60,7 @@ export default function FocusedVideo({ videoTracks, onRemove, onCloseAll }: Focu
         </Button>
       </div>
       <div
-        className="flex-1 min-h-0 grid gap-2 p-4"
+        className="flex-1 min-h-0 grid gap-2 p-4 place-content-center"
         style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}
       >
         {[...videoTracks.entries()].map(([username, track]) => (

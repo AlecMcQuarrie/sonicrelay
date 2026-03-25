@@ -27,7 +27,9 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
   const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
+  const [screenTracks, setScreenTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
   const [focusedVideoUsers, setFocusedVideoUsers] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
@@ -90,14 +92,34 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           else {
             next.delete(user);
             setFocusedVideoUsers((prev) => {
-              if (!prev.has(user)) return prev;
+              const key = `camera:${user}`;
+              if (!prev.has(key)) return prev;
               const next = new Set(prev);
-              next.delete(user);
+              next.delete(key);
               return next;
             });
           }
           return next;
         });
+      },
+      onScreenTrack: (user, track) => {
+        setScreenTracks((prev) => {
+          const next = new Map(prev);
+          if (track) next.set(user, track);
+          else {
+            next.delete(user);
+            setFocusedVideoUsers((prev) => {
+              const key = `screen:${user}`;
+              if (!prev.has(key)) return prev;
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+          }
+          return next;
+        });
+        // Sync isScreenSharing for local user
+        if (user === username) setIsScreenSharing(!!track);
       },
     });
 
@@ -130,6 +152,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setVoiceChannelId(channelId);
     setIsMuted(false);
     setIsCameraOn(false);
+    setIsScreenSharing(false);
   }, [voiceChannelId, username]);
 
   const leaveVoiceChannel = useCallback(async () => {
@@ -137,6 +160,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setVoiceChannelId(null);
     setIsMuted(false);
     setIsCameraOn(false);
+    setIsScreenSharing(false);
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -153,6 +177,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setIsCameraOn(!isCameraOn);
   }, [isCameraOn]);
 
+  const toggleScreenShare = useCallback(async () => {
+    if (isScreenSharing) {
+      await voiceRef.current?.stopScreenShare();
+    } else {
+      await voiceRef.current?.startScreenShare();
+    }
+  }, [isScreenSharing]);
+
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
@@ -167,6 +199,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           speakingUsers={speakingUsers}
           peerPings={peerPings}
           videoTracks={videoTracks}
+          screenTracks={screenTracks}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
           onFocusVideo={(user) => {
@@ -183,8 +216,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             channelName={currentVoiceChannel.name}
             isMuted={isMuted}
             isCameraOn={isCameraOn}
+            isScreenSharing={isScreenSharing}
             onToggleMute={toggleMute}
             onToggleCamera={toggleCamera}
+            onToggleScreenShare={toggleScreenShare}
             onDisconnect={leaveVoiceChannel}
           />
         )}
@@ -206,9 +241,11 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         )}
         {focusedVideoUsers.size > 0 && (() => {
           const focusedTracks = new Map<string, MediaStreamTrack>();
-          for (const user of focusedVideoUsers) {
-            const track = videoTracks.get(user);
-            if (track) focusedTracks.set(user, track);
+          for (const key of focusedVideoUsers) {
+            const [source, user] = key.split(':');
+            const trackMap = source === 'screen' ? screenTracks : videoTracks;
+            const track = trackMap.get(user);
+            if (track) focusedTracks.set(key, track);
           }
           if (focusedTracks.size === 0) return null;
           return (

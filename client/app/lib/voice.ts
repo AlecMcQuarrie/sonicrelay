@@ -32,6 +32,7 @@ type VoiceHandlers = {
   onPeerLeft: (channelId: string, username: string) => void;
   onSpeakingChange: (username: string, isSpeaking: boolean) => void;
   onVideoTrack: (username: string, track: MediaStreamTrack | null) => void;
+  onScreenTrack: (username: string, track: MediaStreamTrack | null) => void;
 };
 
 export class VoiceClient {
@@ -41,9 +42,13 @@ export class VoiceClient {
   private audioProducer: types.Producer | null = null;
   private videoProducer: types.Producer | null = null;
   private videoStream: MediaStream | null = null;
+  private screenProducer: types.Producer | null = null;
+  private screenStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
   private audioElements = new Map<string, HTMLAudioElement>();
-  private videoProducerIds = new Set<string>(); // producer IDs that are video
+  private videoProducerIds = new Set<string>(); // producer IDs that are camera video
+  private screenProducerIds = new Set<string>(); // producer IDs that are screen share
+  private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen'
   private ws: WebSocket;
   private channelId: string | null = null;
   private handlers: VoiceHandlers;
@@ -69,6 +74,7 @@ export class VoiceClient {
       switch (msg.action) {
         case 'new-producer':
           if (msg.username) this.producerUsernames.set(msg.producerId, msg.username);
+          if (msg.source) this.producerSources.set(msg.producerId, msg.source);
           this.consumeProducer(msg.producerId);
           break;
         case 'producer-closed':
@@ -114,9 +120,9 @@ export class VoiceClient {
       }).then(() => callback()).catch(errback);
     });
 
-    this.sendTransport.on('produce', ({ kind, rtpParameters }, callback, errback) => {
+    this.sendTransport.on('produce', ({ kind, rtpParameters, appData }, callback, errback) => {
       request(this.ws, 'produce', {
-        channelId, kind, rtpParameters,
+        channelId, kind, rtpParameters, source: appData?.source,
       }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
     });
 
@@ -149,8 +155,9 @@ export class VoiceClient {
     });
 
     // Consume existing producers in the channel
-    for (const { producerId, username: producerUsername } of joinResult.existingProducers) {
+    for (const { producerId, username: producerUsername, source } of joinResult.existingProducers) {
       if (producerUsername) this.producerUsernames.set(producerId, producerUsername);
+      if (source) this.producerSources.set(producerId, source);
       await this.consumeProducer(producerId);
     }
 
@@ -176,11 +183,15 @@ export class VoiceClient {
 
     this.consumers.set(producerId, consumer);
     const remoteUsername = this.producerUsernames.get(producerId);
+    const source = this.producerSources.get(producerId) || 'camera';
 
     if (consumer.kind === 'video') {
-      this.videoProducerIds.add(producerId);
-      if (remoteUsername) {
-        this.handlers.onVideoTrack(remoteUsername, consumer.track);
+      if (source === 'screen') {
+        this.screenProducerIds.add(producerId);
+        if (remoteUsername) this.handlers.onScreenTrack(remoteUsername, consumer.track);
+      } else {
+        this.videoProducerIds.add(producerId);
+        if (remoteUsername) this.handlers.onVideoTrack(remoteUsername, consumer.track);
       }
       return;
     }
@@ -209,9 +220,11 @@ export class VoiceClient {
     }
 
     const username = this.producerUsernames.get(producerId);
-    const isVideo = this.videoProducerIds.has(producerId);
 
-    if (isVideo) {
+    if (this.screenProducerIds.has(producerId)) {
+      this.screenProducerIds.delete(producerId);
+      if (username) this.handlers.onScreenTrack(username, null);
+    } else if (this.videoProducerIds.has(producerId)) {
       this.videoProducerIds.delete(producerId);
       if (username) this.handlers.onVideoTrack(username, null);
     } else {
@@ -228,6 +241,7 @@ export class VoiceClient {
     }
 
     if (username) this.producerUsernames.delete(producerId);
+    this.producerSources.delete(producerId);
   }
 
   private startLevelMonitoring() {
@@ -283,7 +297,7 @@ export class VoiceClient {
     if (!this.sendTransport || !this.channelId || this.videoProducer) return;
     this.videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
     const videoTrack = this.videoStream.getVideoTracks()[0];
-    this.videoProducer = await this.sendTransport.produce({ track: videoTrack });
+    this.videoProducer = await this.sendTransport.produce({ track: videoTrack, appData: { source: 'camera' } });
 
     // Show local video via handler
     if (this.localUsername) {
@@ -313,12 +327,48 @@ export class VoiceClient {
     }
   }
 
+  async startScreenShare() {
+    if (!this.sendTransport || !this.channelId || this.screenProducer) return;
+    this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const screenTrack = this.screenStream.getVideoTracks()[0];
+
+    // Browser "Stop sharing" button closes the track — handle it
+    screenTrack.onended = () => { this.stopScreenShare(); };
+
+    this.screenProducer = await this.sendTransport.produce({ track: screenTrack, appData: { source: 'screen' } });
+
+    if (this.localUsername) {
+      this.handlers.onScreenTrack(this.localUsername, screenTrack);
+    }
+  }
+
+  async stopScreenShare() {
+    if (!this.screenProducer || !this.channelId) return;
+
+    const producerId = this.screenProducer.id;
+    try {
+      await request(this.ws, 'close-producer', { channelId: this.channelId, producerId });
+    } catch {}
+
+    this.screenProducer.close();
+    this.screenProducer = null;
+
+    this.screenStream?.getTracks().forEach((t) => t.stop());
+    this.screenStream = null;
+
+    if (this.localUsername) {
+      this.handlers.onScreenTrack(this.localUsername, null);
+    }
+  }
+
   async leave() {
     this.stopLevelMonitoring();
 
-    // Stop camera hardware
+    // Stop camera and screen hardware
     this.videoStream?.getTracks().forEach((t) => t.stop());
     this.videoStream = null;
+    this.screenStream?.getTracks().forEach((t) => t.stop());
+    this.screenStream = null;
 
     // Notify React to clear all video tracks
     for (const producerId of this.videoProducerIds) {
@@ -330,12 +380,24 @@ export class VoiceClient {
     }
     this.videoProducerIds.clear();
 
+    // Notify React to clear all screen tracks
+    for (const producerId of this.screenProducerIds) {
+      const username = this.producerUsernames.get(producerId);
+      if (username) this.handlers.onScreenTrack(username, null);
+    }
+    if (this.localUsername && this.screenProducer) {
+      this.handlers.onScreenTrack(this.localUsername, null);
+    }
+    this.screenProducerIds.clear();
+    this.producerSources.clear();
+
     // Notify server, but don't let a dead WebSocket block cleanup
     if (this.channelId) {
       try { await request(this.ws, 'leave', { channelId: this.channelId }); } catch {}
     }
     this.audioProducer?.close();
     this.videoProducer?.close();
+    this.screenProducer?.close();
     this.sendTransport?.close();
     this.recvTransport?.close();
     this.consumers.forEach((c) => c.close());
@@ -344,6 +406,7 @@ export class VoiceClient {
     this.audioElements.clear();
     this.audioProducer = null;
     this.videoProducer = null;
+    this.screenProducer = null;
     this.sendTransport = null;
     this.recvTransport = null;
     this.device = null;

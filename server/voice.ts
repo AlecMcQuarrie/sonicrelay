@@ -12,6 +12,7 @@ type Peer = {
   sendTransport: types.WebRtcTransport | null;
   recvTransport: types.WebRtcTransport | null;
   producers: Map<string, types.Producer>;
+  producerSources: Map<string, string>; // producerId -> 'camera' | 'screen'
   consumers: Map<string, types.Consumer>;
 };
 
@@ -52,15 +53,17 @@ export async function join(channelId: string, username: string) {
     sendTransport: null,
     recvTransport: null,
     producers: new Map(),
+    producerSources: new Map(),
     consumers: new Map(),
   });
 
   // Collect existing producers from other peers
-  const existingProducers: { producerId: string; kind: string; username: string }[] = [];
+  const existingProducers: { producerId: string; kind: string; username: string; source: string }[] = [];
   for (const [peerUsername, peer] of room.peers) {
     if (peerUsername === username) continue;
     for (const [id, producer] of peer.producers) {
-      existingProducers.push({ producerId: id, kind: producer.kind, username: peerUsername });
+      const source = peer.producerSources.get(id) || 'camera';
+      existingProducers.push({ producerId: id, kind: producer.kind, username: peerUsername, source });
     }
   }
 
@@ -113,13 +116,14 @@ export async function connectTransport(
 
 // Start producing media (client sending audio/video)
 export async function produce(
-  channelId: string, username: string, kind: types.MediaKind, rtpParameters: types.RtpParameters,
+  channelId: string, username: string, kind: types.MediaKind, rtpParameters: types.RtpParameters, source?: string,
 ) {
   const peer = rooms.get(channelId)?.peers.get(username);
   if (!peer?.sendTransport) throw new Error('Send transport not found');
 
   const producer = await peer.sendTransport.produce({ kind, rtpParameters });
   peer.producers.set(producer.id, producer);
+  if (source) peer.producerSources.set(producer.id, source);
 
   return { producerId: producer.id };
 }
@@ -162,6 +166,7 @@ export function closeProducer(channelId: string, username: string, producerId: s
 
   producer.close();
   peer.producers.delete(producerId);
+  peer.producerSources.delete(producerId);
 }
 
 // Leave a voice channel - returns closed producer IDs for notification

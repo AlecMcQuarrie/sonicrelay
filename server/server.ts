@@ -363,11 +363,11 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
             break;
           }
           case 'produce': {
-            const result = await voice.produce(msg.channelId, username, msg.kind, msg.rtpParameters);
+            const result = await voice.produce(msg.channelId, username, msg.kind, msg.rtpParameters, msg.source);
             respond(result);
             broadcastToVoiceChannel(msg.channelId, {
               type: 'voice-notification', action: 'new-producer',
-              producerId: result.producerId, kind: msg.kind, username,
+              producerId: result.producerId, kind: msg.kind, username, source: msg.source,
             }, ws);
             break;
           }

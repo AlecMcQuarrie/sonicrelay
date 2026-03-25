@@ -17,9 +17,10 @@ interface ChannelSidebarProps {
   speakingUsers: Set<string>;
   peerPings: Record<string, number>;
   videoTracks: Map<string, MediaStreamTrack>;
+  screenTracks: Map<string, MediaStreamTrack>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
-  onFocusVideo: (username: string) => void;
+  onFocusVideo: (key: string) => void;
 }
 
 function pingColor(ms: number): string {
@@ -57,6 +58,7 @@ export default function ChannelSidebar({
   speakingUsers,
   peerPings,
   videoTracks,
+  screenTracks,
   onSelectTextChannel,
   onJoinVoiceChannel,
   onFocusVideo,
@@ -114,7 +116,10 @@ export default function ChannelSidebar({
                   )}
                 </div>
                 {videoTracks.has(user) && (
-                  <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(user)} />
+                  <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(`camera:${user}`)} />
+                )}
+                {screenTracks.has(user) && (
+                  <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
                 )}
               </div>
             ))}
