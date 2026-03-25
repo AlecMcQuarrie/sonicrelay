@@ -31,6 +31,7 @@ type VoiceHandlers = {
   onPeerJoined: (channelId: string, username: string) => void;
   onPeerLeft: (channelId: string, username: string) => void;
   onSpeakingChange: (username: string, isSpeaking: boolean) => void;
+  onVideoTrack: (username: string, track: MediaStreamTrack | null) => void;
 };
 
 export class VoiceClient {
@@ -38,8 +39,11 @@ export class VoiceClient {
   private sendTransport: types.Transport | null = null;
   private recvTransport: types.Transport | null = null;
   private audioProducer: types.Producer | null = null;
+  private videoProducer: types.Producer | null = null;
+  private videoStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
   private audioElements = new Map<string, HTMLAudioElement>();
+  private videoProducerIds = new Set<string>(); // producer IDs that are video
   private ws: WebSocket;
   private channelId: string | null = null;
   private handlers: VoiceHandlers;
@@ -171,6 +175,15 @@ export class VoiceClient {
     });
 
     this.consumers.set(producerId, consumer);
+    const remoteUsername = this.producerUsernames.get(producerId);
+
+    if (consumer.kind === 'video') {
+      this.videoProducerIds.add(producerId);
+      if (remoteUsername) {
+        this.handlers.onVideoTrack(remoteUsername, consumer.track);
+      }
+      return;
+    }
 
     // Play the received audio
     const audio = new Audio();
@@ -179,7 +192,6 @@ export class VoiceClient {
     this.audioElements.set(producerId, audio);
 
     // Monitor remote audio levels
-    const remoteUsername = this.producerUsernames.get(producerId);
     if (remoteUsername && this.audioContext) {
       const source = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
       const analyser = this.audioContext.createAnalyser();
@@ -195,18 +207,27 @@ export class VoiceClient {
       consumer.close();
       this.consumers.delete(producerId);
     }
-    const audio = this.audioElements.get(producerId);
-    if (audio) {
-      audio.srcObject = null;
-      this.audioElements.delete(producerId);
-    }
+
     const username = this.producerUsernames.get(producerId);
-    if (username) {
-      this.analysers.delete(username);
-      this.speakingState.delete(username);
-      this.handlers.onSpeakingChange(username, false);
-      this.producerUsernames.delete(producerId);
+    const isVideo = this.videoProducerIds.has(producerId);
+
+    if (isVideo) {
+      this.videoProducerIds.delete(producerId);
+      if (username) this.handlers.onVideoTrack(username, null);
+    } else {
+      const audio = this.audioElements.get(producerId);
+      if (audio) {
+        audio.srcObject = null;
+        this.audioElements.delete(producerId);
+      }
+      if (username) {
+        this.analysers.delete(username);
+        this.speakingState.delete(username);
+        this.handlers.onSpeakingChange(username, false);
+      }
     }
+
+    if (username) this.producerUsernames.delete(producerId);
   }
 
   private startLevelMonitoring() {
@@ -258,13 +279,56 @@ export class VoiceClient {
     return this.audioProducer.paused;
   }
 
+  async startVideo() {
+    if (!this.sendTransport || !this.channelId || this.videoProducer) return;
+    this.videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const videoTrack = this.videoStream.getVideoTracks()[0];
+    this.videoProducer = await this.sendTransport.produce({ track: videoTrack });
+
+    // Show local video via handler
+    if (this.localUsername) {
+      this.handlers.onVideoTrack(this.localUsername, videoTrack);
+    }
+  }
+
+  async stopVideo() {
+    if (!this.videoProducer) return;
+    this.videoProducer.close();
+    this.videoProducer = null;
+
+    // Stop the camera hardware
+    this.videoStream?.getTracks().forEach((t) => t.stop());
+    this.videoStream = null;
+
+    // Notify React to remove local video
+    if (this.localUsername) {
+      this.handlers.onVideoTrack(this.localUsername, null);
+    }
+  }
+
   async leave() {
     this.stopLevelMonitoring();
+
+    // Stop camera hardware
+    this.videoStream?.getTracks().forEach((t) => t.stop());
+    this.videoStream = null;
+
+    // Notify React to clear all video tracks
+    for (const producerId of this.videoProducerIds) {
+      const username = this.producerUsernames.get(producerId);
+      if (username) this.handlers.onVideoTrack(username, null);
+    }
+    if (this.localUsername && this.videoProducer) {
+      this.handlers.onVideoTrack(this.localUsername, null);
+    }
+    this.videoProducerIds.clear();
+
     // Notify server, but don't let a dead WebSocket block cleanup
     if (this.channelId) {
       try { await request(this.ws, 'leave', { channelId: this.channelId }); } catch {}
     }
     this.audioProducer?.close();
+    this.videoProducer?.close();
     this.sendTransport?.close();
     this.recvTransport?.close();
     this.consumers.forEach((c) => c.close());
@@ -272,6 +336,7 @@ export class VoiceClient {
     this.audioElements.forEach((a) => { a.srcObject = null; });
     this.audioElements.clear();
     this.audioProducer = null;
+    this.videoProducer = null;
     this.sendTransport = null;
     this.recvTransport = null;
     this.device = null;

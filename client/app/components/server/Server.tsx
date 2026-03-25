@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import TextChannel from "~/components/text-channel/TextChannel";
 import UserList from "~/components/user-list/UserList";
+import VideoGrid from "~/components/video-grid/VideoGrid";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { VoiceClient } from "~/lib/voice";
 
@@ -24,6 +25,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
   const [isMuted, setIsMuted] = useState(false);
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
@@ -78,6 +81,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           return next;
         });
       },
+      onVideoTrack: (user, track) => {
+        setVideoTracks((prev) => {
+          const next = new Map(prev);
+          if (track) next.set(user, track);
+          else next.delete(user);
+          return next;
+        });
+      },
     });
 
     // Handle server pushes for voice state and presence
@@ -105,18 +116,29 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     await voiceRef.current?.join(channelId, username);
     setVoiceChannelId(channelId);
     setIsMuted(false);
+    setIsCameraOn(false);
   }, [voiceChannelId, username]);
 
   const leaveVoiceChannel = useCallback(async () => {
     await voiceRef.current?.leave();
     setVoiceChannelId(null);
     setIsMuted(false);
+    setIsCameraOn(false);
   }, []);
 
   const toggleMute = useCallback(() => {
     const muted = voiceRef.current?.toggleMute() ?? false;
     setIsMuted(muted);
   }, []);
+
+  const toggleCamera = useCallback(async () => {
+    if (isCameraOn) {
+      await voiceRef.current?.stopVideo();
+    } else {
+      await voiceRef.current?.startVideo();
+    }
+    setIsCameraOn(!isCameraOn);
+  }, [isCameraOn]);
 
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
@@ -137,25 +159,30 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           <VoiceControls
             channelName={currentVoiceChannel.name}
             isMuted={isMuted}
+            isCameraOn={isCameraOn}
             onToggleMute={toggleMute}
+            onToggleCamera={toggleCamera}
             onDisconnect={leaveVoiceChannel}
           />
         )}
       </div>
-      {selectedTextChannel ? (
-        <TextChannel
-          serverIP={serverIP}
-          channelId={selectedTextChannel.__id}
-          channelName={selectedTextChannel.name}
-          accessToken={accessToken}
-          username={username}
-          wsRef={wsRef}
-        />
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          Select a channel
-        </div>
-      )}
+      <div className="flex-1 flex flex-col h-screen">
+        <VideoGrid videoTracks={videoTracks} localUsername={username} />
+        {selectedTextChannel ? (
+          <TextChannel
+            serverIP={serverIP}
+            channelId={selectedTextChannel.__id}
+            channelName={selectedTextChannel.name}
+            accessToken={accessToken}
+            username={username}
+            wsRef={wsRef}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            Select a channel
+          </div>
+        )}
+      </div>
       <div className="w-52 border-l h-screen">
         <UserList users={allUsers} onlineUsers={onlineUsers} />
       </div>
