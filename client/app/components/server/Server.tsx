@@ -22,6 +22,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
   const [isMuted, setIsMuted] = useState(false);
+  const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
 
@@ -58,6 +59,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           [channelId]: (prev[channelId] || []).filter((u) => u !== user),
         }));
       },
+      onSpeakingChange: (user, isSpeaking) => {
+        setSpeakingUsers((prev) => {
+          const next = new Set(prev);
+          if (isSpeaking) next.add(user);
+          else next.delete(user);
+          return next;
+        });
+      },
     });
 
     // Handle initial voice state from server
@@ -79,10 +88,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const joinVoiceChannel = useCallback(async (channelId: string) => {
     if (voiceChannelId === channelId) return;
     if (voiceChannelId) await voiceRef.current?.leave();
-    await voiceRef.current?.join(channelId);
+    await voiceRef.current?.join(channelId, username);
     setVoiceChannelId(channelId);
     setIsMuted(false);
-  }, [voiceChannelId]);
+  }, [voiceChannelId, username]);
 
   const leaveVoiceChannel = useCallback(async () => {
     await voiceRef.current?.leave();
@@ -106,6 +115,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           selectedTextChannelId={selectedTextChannelId}
           voiceChannelId={voiceChannelId}
           voicePeers={voicePeers}
+          speakingUsers={speakingUsers}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
         />
@@ -113,6 +123,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           <VoiceControls
             channelName={currentVoiceChannel.name}
             isMuted={isMuted}
+            isSpeaking={speakingUsers.has(username)}
             onToggleMute={toggleMute}
             onDisconnect={leaveVoiceChannel}
           />

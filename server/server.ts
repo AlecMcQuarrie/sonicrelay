@@ -293,7 +293,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
             respond(result);
             broadcastToVoiceChannel(msg.channelId, {
               type: 'voice-notification', action: 'new-producer',
-              producerId: result.producerId, kind: msg.kind,
+              producerId: result.producerId, kind: msg.kind, username,
             }, ws);
             break;
           }

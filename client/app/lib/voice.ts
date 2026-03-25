@@ -21,6 +21,7 @@ function request(ws: WebSocket, action: string, data: Record<string, any> = {}):
 type VoiceHandlers = {
   onPeerJoined: (channelId: string, username: string) => void;
   onPeerLeft: (channelId: string, username: string) => void;
+  onSpeakingChange: (username: string, isSpeaking: boolean) => void;
 };
 
 export class VoiceClient {
@@ -34,6 +35,14 @@ export class VoiceClient {
   private channelId: string | null = null;
   private handlers: VoiceHandlers;
   private notificationHandler: (event: MessageEvent) => void;
+  private localUsername: string | null = null;
+
+  // Audio level monitoring
+  private audioContext: AudioContext | null = null;
+  private analysers = new Map<string, AnalyserNode>(); // username -> analyser
+  private speakingState = new Map<string, boolean>(); // username -> isSpeaking
+  private producerUsernames = new Map<string, string>(); // producerId -> username
+  private levelCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(ws: WebSocket, handlers: VoiceHandlers) {
     this.ws = ws;
@@ -46,6 +55,7 @@ export class VoiceClient {
 
       switch (msg.action) {
         case 'new-producer':
+          if (msg.username) this.producerUsernames.set(msg.producerId, msg.username);
           this.consumeProducer(msg.producerId);
           break;
         case 'producer-closed':
@@ -62,9 +72,11 @@ export class VoiceClient {
     ws.addEventListener('message', this.notificationHandler);
   }
 
-  async join(channelId: string) {
+  async join(channelId: string, username?: string) {
     this.channelId = channelId;
+    if (username) this.localUsername = username;
     this.device = new Device();
+    this.audioContext = new AudioContext();
 
     // Get router capabilities and join the room
     const joinResult = await request(this.ws, 'join', { channelId });
@@ -95,6 +107,15 @@ export class VoiceClient {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
+    // Monitor local mic audio levels
+    if (this.localUsername && this.audioContext) {
+      const source = this.audioContext.createMediaStreamSource(stream);
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      this.analysers.set(this.localUsername, analyser);
+    }
+
     // Create recv transport
     const recvParams = await request(this.ws, 'create-transport', { channelId, direction: 'recv' });
     this.recvTransport = this.device.createRecvTransport({
@@ -111,9 +132,13 @@ export class VoiceClient {
     });
 
     // Consume existing producers in the channel
-    for (const { producerId } of joinResult.existingProducers) {
+    for (const { producerId, username: producerUsername } of joinResult.existingProducers) {
+      if (producerUsername) this.producerUsernames.set(producerId, producerUsername);
       await this.consumeProducer(producerId);
     }
+
+    // Start polling audio levels
+    this.startLevelMonitoring();
   }
 
   private async consumeProducer(producerId: string) {
@@ -139,6 +164,16 @@ export class VoiceClient {
     audio.srcObject = new MediaStream([consumer.track]);
     audio.play();
     this.audioElements.set(producerId, audio);
+
+    // Monitor remote audio levels
+    const remoteUsername = this.producerUsernames.get(producerId);
+    if (remoteUsername && this.audioContext) {
+      const source = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      this.analysers.set(remoteUsername, analyser);
+    }
   }
 
   private removeProducer(producerId: string) {
@@ -152,6 +187,51 @@ export class VoiceClient {
       audio.srcObject = null;
       this.audioElements.delete(producerId);
     }
+    const username = this.producerUsernames.get(producerId);
+    if (username) {
+      this.analysers.delete(username);
+      this.speakingState.delete(username);
+      this.handlers.onSpeakingChange(username, false);
+      this.producerUsernames.delete(producerId);
+    }
+  }
+
+  private startLevelMonitoring() {
+    const SPEAKING_THRESHOLD = 15; // audio level 0-255
+    const dataArray = new Uint8Array(128);
+
+    this.levelCheckInterval = setInterval(() => {
+      for (const [username, analyser] of this.analysers) {
+        analyser.getByteFrequencyData(dataArray);
+        // Average the frequency data to get an overall level
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const average = sum / dataArray.length;
+
+        const isSpeaking = average > SPEAKING_THRESHOLD;
+        const wasSpeaking = this.speakingState.get(username) ?? false;
+        if (isSpeaking !== wasSpeaking) {
+          this.speakingState.set(username, isSpeaking);
+          this.handlers.onSpeakingChange(username, isSpeaking);
+        }
+      }
+    }, 100);
+  }
+
+  private stopLevelMonitoring() {
+    if (this.levelCheckInterval) {
+      clearInterval(this.levelCheckInterval);
+      this.levelCheckInterval = null;
+    }
+    // Notify all as not speaking
+    for (const [username] of this.speakingState) {
+      this.handlers.onSpeakingChange(username, false);
+    }
+    this.analysers.clear();
+    this.speakingState.clear();
+    this.producerUsernames.clear();
+    this.audioContext?.close();
+    this.audioContext = null;
   }
 
   toggleMute(): boolean {
@@ -162,6 +242,7 @@ export class VoiceClient {
   }
 
   async leave() {
+    this.stopLevelMonitoring();
     if (this.channelId) {
       await request(this.ws, 'leave', { channelId: this.channelId });
     }
@@ -177,6 +258,7 @@ export class VoiceClient {
     this.recvTransport = null;
     this.device = null;
     this.channelId = null;
+    this.localUsername = null;
   }
 
   destroy() {

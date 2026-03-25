@@ -56,11 +56,11 @@ export async function join(channelId: string, username: string) {
   });
 
   // Collect existing producers from other peers
-  const existingProducers: { producerId: string; kind: string }[] = [];
+  const existingProducers: { producerId: string; kind: string; username: string }[] = [];
   for (const [peerUsername, peer] of room.peers) {
     if (peerUsername === username) continue;
     for (const [id, producer] of peer.producers) {
-      existingProducers.push({ producerId: id, kind: producer.kind });
+      existingProducers.push({ producerId: id, kind: producer.kind, username: peerUsername });
     }
   }
 

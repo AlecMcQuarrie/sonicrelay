@@ -13,6 +13,7 @@ interface ChannelSidebarProps {
   selectedTextChannelId: string | null;
   voiceChannelId: string | null;
   voicePeers: Record<string, string[]>;
+  speakingUsers: Set<string>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
 }
@@ -22,6 +23,7 @@ export default function ChannelSidebar({
   selectedTextChannelId,
   voiceChannelId,
   voicePeers,
+  speakingUsers,
   onSelectTextChannel,
   onJoinVoiceChannel,
 }: ChannelSidebarProps) {
@@ -64,7 +66,17 @@ export default function ChannelSidebar({
               {channel.name}
             </Button>
             {voicePeers[channel.__id]?.map((user) => (
-              <div key={user} className="pl-8 py-1 text-sm text-muted-foreground">
+              <div
+                key={user}
+                className={`pl-8 py-1 text-sm flex items-center gap-2 ${
+                  speakingUsers.has(user) ? "text-green-400" : "text-muted-foreground"
+                }`}
+              >
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    speakingUsers.has(user) ? "bg-green-400" : "bg-muted-foreground/40"
+                  }`}
+                />
                 {user}
               </div>
             ))}
