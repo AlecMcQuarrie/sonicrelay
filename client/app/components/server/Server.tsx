@@ -28,7 +28,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
-  const [focusedVideoUser, setFocusedVideoUser] = useState<string | null>(null);
+  const [focusedVideoUsers, setFocusedVideoUsers] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
@@ -89,7 +89,12 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           if (track) next.set(user, track);
           else {
             next.delete(user);
-            setFocusedVideoUser((prev) => prev === user ? null : prev);
+            setFocusedVideoUsers((prev) => {
+              if (!prev.has(user)) return prev;
+              const next = new Set(prev);
+              next.delete(user);
+              return next;
+            });
           }
           return next;
         });
@@ -164,7 +169,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           videoTracks={videoTracks}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
-          onFocusVideo={setFocusedVideoUser}
+          onFocusVideo={(user) => {
+            setFocusedVideoUsers((prev) => {
+              const next = new Set(prev);
+              if (next.has(user)) next.delete(user);
+              else next.add(user);
+              return next;
+            });
+          }}
         />
         {currentVoiceChannel && (
           <VoiceControls
@@ -192,13 +204,27 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             Select a channel
           </div>
         )}
-        {focusedVideoUser && videoTracks.has(focusedVideoUser) && (
-          <FocusedVideo
-            username={focusedVideoUser}
-            track={videoTracks.get(focusedVideoUser)!}
-            onClose={() => setFocusedVideoUser(null)}
-          />
-        )}
+        {focusedVideoUsers.size > 0 && (() => {
+          const focusedTracks = new Map<string, MediaStreamTrack>();
+          for (const user of focusedVideoUsers) {
+            const track = videoTracks.get(user);
+            if (track) focusedTracks.set(user, track);
+          }
+          if (focusedTracks.size === 0) return null;
+          return (
+            <FocusedVideo
+              videoTracks={focusedTracks}
+              onRemove={(user) => {
+                setFocusedVideoUsers((prev) => {
+                  const next = new Set(prev);
+                  next.delete(user);
+                  return next;
+                });
+              }}
+              onCloseAll={() => setFocusedVideoUsers(new Set())}
+            />
+          );
+        })()}
       </div>
       <div className="w-52 border-l h-screen">
         <UserList users={allUsers} onlineUsers={onlineUsers} />
