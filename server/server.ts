@@ -3,9 +3,10 @@ const jwt = require("jsonwebtoken");
 
 import express, { Request, Response } from "express";
 import { Database } from "simpl.db";
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import "dotenv/config";
+import * as voice from './voice';
 
 type RipV2IncomingMessage = IncomingMessage & {
   username?: string;
@@ -25,6 +26,7 @@ const Users = db.createCollection<User>("users");
 
 type Channel = {
   name: string;
+  type: "text" | "voice";
   $id: string;
 };
 const Channels = db.createCollection<Channel>("channels");
@@ -38,9 +40,10 @@ type Message = {
 };
 const Messages = db.createCollection<Message>("messages");
 
-// Seed a default "general" channel if none exist
+// Seed default channels if none exist
 if (Channels.getAll().length === 0) {
-  Channels.create({ name: "general" });
+  Channels.create({ name: "general", type: "text" });
+  Channels.create({ name: "General", type: "voice" });
 }
 
 const cors = require('cors');
@@ -53,7 +56,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Server start
-const server = app.listen(port, () => {
+const server = app.listen(port, async () => {
+  await voice.init();
   console.log(`RipV2 server started at http://localhost:${port}`);
 });
 
@@ -129,13 +133,13 @@ app.post("/channels", (req: Request, res: Response) => {
   const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
-    const channel = Channels.create({ name: req.body.name });
+    const channel = Channels.create({ name: req.body.name, type: req.body.type || "text" });
     return res.status(200).json({ channel });
   }
   return res.sendStatus(401);
 });
 
-// Message endpoints
+// Message endpoint
 app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
@@ -148,7 +152,46 @@ app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   return res.sendStatus(401);
 });
 
-// Websockets for real time communication
+// ─── WebSocket ───────────────────────────────────────────────────────────────
+
+// Track connected clients
+type ConnectedClient = {
+  username: string;
+  voiceChannelId: string | null;
+};
+const clients = new Map<WebSocket, ConnectedClient>();
+
+// Get current voice peers across all channels
+function getVoicePeers(): Record<string, string[]> {
+  const peers: Record<string, string[]> = {};
+  for (const client of clients.values()) {
+    if (client.voiceChannelId) {
+      if (!peers[client.voiceChannelId]) peers[client.voiceChannelId] = [];
+      peers[client.voiceChannelId].push(client.username);
+    }
+  }
+  return peers;
+}
+
+// Broadcast to all connected clients
+function broadcastToAll(message: object) {
+  const data = JSON.stringify(message);
+  for (const [ws] of clients) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(data);
+  }
+}
+
+// Broadcast to peers in a specific voice channel (excluding one client)
+function broadcastToVoiceChannel(channelId: string, message: object, excludeWs?: WebSocket) {
+  const data = JSON.stringify(message);
+  for (const [ws, client] of clients) {
+    if (client.voiceChannelId === channelId && ws !== excludeWs && ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  }
+}
+
+// WebSocket server with JWT auth
 const wss = new WebSocketServer({
   server, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
     const url = new URL(info.req.url || "", `http://${info.req.headers.host}`);
@@ -165,21 +208,122 @@ const wss = new WebSocketServer({
 });
 
 wss.on('connection', (ws, req: RipV2IncomingMessage) => {
-  const { username } = req;
+  const username = req.username!;
+  clients.set(ws, { username, voiceChannelId: null });
 
-  ws.on('message', (data) => {
-    const { channelId, messageContent } = JSON.parse(data.toString());
-    const message = {
-      channelId,
-      messageContent,
-      timestamp: new Date().toISOString(),
-      sender: username,
-    };
-    Messages.create(message);
-    wss.clients.forEach((client) => {
-      if (client !== ws) {
-        client.send(JSON.stringify(message));
+  // Send current voice state on connect
+  ws.send(JSON.stringify({ type: 'voice-state', voicePeers: getVoicePeers() }));
+
+  // Clean up on disconnect
+  ws.on('close', () => {
+    const client = clients.get(ws);
+    if (client?.voiceChannelId) {
+      const closedProducerIds = voice.leave(client.voiceChannelId, username);
+      for (const producerId of closedProducerIds) {
+        broadcastToVoiceChannel(client.voiceChannelId, {
+          type: 'voice-notification', action: 'producer-closed', producerId,
+        });
       }
-    });
+      broadcastToAll({
+        type: 'voice-notification', action: 'peer-left',
+        channelId: client.voiceChannelId, username,
+      });
+    }
+    clients.delete(ws);
+  });
+
+  // Handle incoming messages
+  ws.on('message', async (data) => {
+    const msg = JSON.parse(data.toString());
+
+    // ── Text message ──
+    if (msg.type === 'text-message') {
+      const message = {
+        type: 'text-message',
+        channelId: msg.channelId,
+        messageContent: msg.messageContent,
+        timestamp: new Date().toISOString(),
+        sender: username,
+      };
+      Messages.create({
+        channelId: msg.channelId,
+        messageContent: msg.messageContent,
+        timestamp: message.timestamp,
+        sender: username,
+      });
+      for (const [client] of clients) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify(message));
+        }
+      }
+      return;
+    }
+
+    // ── Voice signaling ──
+    if (msg.type === 'voice') {
+      const respond = (responseData: any) => {
+        ws.send(JSON.stringify({ requestId: msg.requestId, ...responseData }));
+      };
+
+      try {
+        switch (msg.action) {
+          case 'join': {
+            const result = await voice.join(msg.channelId, username);
+            const client = clients.get(ws);
+            if (client) client.voiceChannelId = msg.channelId;
+            respond(result);
+            broadcastToAll({
+              type: 'voice-notification', action: 'peer-joined',
+              channelId: msg.channelId, username,
+            });
+            break;
+          }
+          case 'create-transport': {
+            const result = await voice.createTransport(msg.channelId, username, msg.direction);
+            respond(result);
+            break;
+          }
+          case 'connect-transport': {
+            await voice.connectTransport(msg.channelId, username, msg.transportId, msg.dtlsParameters);
+            respond({});
+            break;
+          }
+          case 'produce': {
+            const result = await voice.produce(msg.channelId, username, msg.kind, msg.rtpParameters);
+            respond(result);
+            broadcastToVoiceChannel(msg.channelId, {
+              type: 'voice-notification', action: 'new-producer',
+              producerId: result.producerId, kind: msg.kind,
+            }, ws);
+            break;
+          }
+          case 'consume': {
+            const result = await voice.consume(
+              msg.channelId, username, msg.producerId, msg.rtpCapabilities,
+            );
+            respond(result);
+            break;
+          }
+          case 'leave': {
+            const closedProducerIds = voice.leave(msg.channelId, username);
+            const client = clients.get(ws);
+            if (client) client.voiceChannelId = null;
+            for (const producerId of closedProducerIds) {
+              broadcastToVoiceChannel(msg.channelId, {
+                type: 'voice-notification', action: 'producer-closed', producerId,
+              });
+            }
+            respond({});
+            broadcastToAll({
+              type: 'voice-notification', action: 'peer-left',
+              channelId: msg.channelId, username,
+            });
+            break;
+          }
+        }
+      } catch (err: any) {
+        respond({ error: err.message });
+      }
+    }
   });
 });

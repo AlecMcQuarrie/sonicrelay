@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import TextChannel from "~/components/text-channel/TextChannel";
+import VoiceControls from "~/components/voice-controls/VoiceControls";
+import { VoiceClient } from "~/lib/voice";
 
 type Channel = {
   name: string;
-  $id: string;
+  type: "text" | "voice";
+  __id: string; // simpl.db serializes $id as __id in JSON
 };
 
 interface ServerProps {
@@ -15,10 +18,14 @@ interface ServerProps {
 
 export default function Server({ serverIP, accessToken, username }: ServerProps) {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
+  const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
+  const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
+  const [isMuted, setIsMuted] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const voiceRef = useRef<VoiceClient | null>(null);
 
-  // Fetch channels and connect to websocket
+  // Fetch channels and set up WebSocket
   useEffect(() => {
     fetch(`http://${serverIP}/channels`, {
       headers: { "access-token": accessToken },
@@ -26,31 +33,93 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       .then((res) => res.json())
       .then((data) => {
         setChannels(data.channels);
-        if (data.channels.length > 0) {
-          setSelectedChannelId(data.channels[0].$id);
-        }
+        const firstText = data.channels.find((c: Channel) => c.type === "text");
+        if (firstText) setSelectedTextChannelId(firstText.__id);
       });
 
     const ws = new WebSocket(`ws://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
 
-    return () => ws.close();
-  }, [accessToken]);
+    // Initialize voice client
+    voiceRef.current = new VoiceClient(ws, {
+      onPeerJoined: (channelId, user) => {
+        setVoicePeers((prev) => {
+          const current = prev[channelId] || [];
+          if (current.includes(user)) return prev;
+          return { ...prev, [channelId]: [...current, user] };
+        });
+      },
+      onPeerLeft: (channelId, user) => {
+        setVoicePeers((prev) => ({
+          ...prev,
+          [channelId]: (prev[channelId] || []).filter((u) => u !== user),
+        }));
+      },
+    });
 
-  const selectedChannel = channels.find((c) => c.$id === selectedChannelId);
+    // Handle initial voice state from server
+    const handleVoiceState = (event: MessageEvent) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'voice-state') {
+        setVoicePeers(msg.voicePeers);
+      }
+    };
+    ws.addEventListener('message', handleVoiceState);
+
+    return () => {
+      voiceRef.current?.leave();
+      voiceRef.current?.destroy();
+      ws.close();
+    };
+  }, [serverIP, accessToken]);
+
+  const joinVoiceChannel = useCallback(async (channelId: string) => {
+    if (voiceChannelId === channelId) return;
+    if (voiceChannelId) await voiceRef.current?.leave();
+    await voiceRef.current?.join(channelId);
+    setVoiceChannelId(channelId);
+    setIsMuted(false);
+  }, [voiceChannelId]);
+
+  const leaveVoiceChannel = useCallback(async () => {
+    await voiceRef.current?.leave();
+    setVoiceChannelId(null);
+    setIsMuted(false);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const muted = voiceRef.current?.toggleMute() ?? false;
+    setIsMuted(muted);
+  }, []);
+
+  const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
+  const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
   return (
     <div className="flex h-screen">
-      <ChannelSidebar
-        channels={channels}
-        selectedChannelId={selectedChannelId}
-        onSelectChannel={setSelectedChannelId}
-      />
-      {selectedChannel ? (
+      <div className="w-60 border-r flex flex-col h-screen">
+        <ChannelSidebar
+          channels={channels}
+          selectedTextChannelId={selectedTextChannelId}
+          voiceChannelId={voiceChannelId}
+          voicePeers={voicePeers}
+          onSelectTextChannel={setSelectedTextChannelId}
+          onJoinVoiceChannel={joinVoiceChannel}
+        />
+        {currentVoiceChannel && (
+          <VoiceControls
+            channelName={currentVoiceChannel.name}
+            isMuted={isMuted}
+            onToggleMute={toggleMute}
+            onDisconnect={leaveVoiceChannel}
+          />
+        )}
+      </div>
+      {selectedTextChannel ? (
         <TextChannel
           serverIP={serverIP}
-          channelId={selectedChannel.$id}
-          channelName={selectedChannel.name}
+          channelId={selectedTextChannel.__id}
+          channelName={selectedTextChannel.name}
           accessToken={accessToken}
           username={username}
           wsRef={wsRef}

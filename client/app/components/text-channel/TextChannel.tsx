@@ -44,7 +44,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     if (!ws) return;
 
     const handleMessage = (event: MessageEvent) => {
-      const message: Message = JSON.parse(event.data);
+      const message = JSON.parse(event.data);
+      if (message.type !== 'text-message') return;
       if (message.channelId === channelId) {
         setMessages((prev) => [...prev, message]);
       }
@@ -57,7 +58,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const sendMessage = useCallback(() => {
     if (!input.trim() || !wsRef.current) return;
 
-    wsRef.current.send(JSON.stringify({ channelId, messageContent: input }));
+    wsRef.current.send(JSON.stringify({ type: 'text-message', channelId, messageContent: input }));
 
     // Add our own message locally (server doesn't echo back to sender)
     setMessages((prev) => [

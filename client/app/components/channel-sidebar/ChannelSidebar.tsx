@@ -1,34 +1,74 @@
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
+import { Hash, Volume2 } from "lucide-react";
 
 type Channel = {
   name: string;
-  $id: string;
+  type: "text" | "voice";
+  __id: string;
 };
 
 interface ChannelSidebarProps {
   channels: Channel[];
-  selectedChannelId: string | null;
-  onSelectChannel: (channelId: string) => void;
+  selectedTextChannelId: string | null;
+  voiceChannelId: string | null;
+  voicePeers: Record<string, string[]>;
+  onSelectTextChannel: (channelId: string) => void;
+  onJoinVoiceChannel: (channelId: string) => void;
 }
 
-export default function ChannelSidebar({ channels, selectedChannelId, onSelectChannel }: ChannelSidebarProps) {
+export default function ChannelSidebar({
+  channels,
+  selectedTextChannelId,
+  voiceChannelId,
+  voicePeers,
+  onSelectTextChannel,
+  onJoinVoiceChannel,
+}: ChannelSidebarProps) {
+  const textChannels = channels.filter((c) => c.type === "text");
+  const voiceChannels = channels.filter((c) => c.type === "voice");
+
   return (
-    <div className="w-60 border-r flex flex-col h-screen">
-      <div className="p-4 font-bold text-sm uppercase tracking-wide text-muted-foreground">
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
         Text Channels
       </div>
-      <Separator />
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {channels.map((channel) => (
+      <div className="px-2 space-y-1">
+        {textChannels.map((channel) => (
           <Button
-            key={channel.$id}
-            variant={channel.$id === selectedChannelId ? "secondary" : "ghost"}
+            key={channel.__id}
+            variant={channel.__id === selectedTextChannelId ? "secondary" : "ghost"}
             className="w-full justify-start"
-            onClick={() => onSelectChannel(channel.$id)}
+            onClick={() => onSelectTextChannel(channel.__id)}
           >
-            # {channel.name}
+            <Hash className="w-4 h-4 mr-1" />
+            {channel.name}
           </Button>
+        ))}
+      </div>
+
+      <Separator className="my-2" />
+
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
+        Voice Channels
+      </div>
+      <div className="px-2 space-y-1">
+        {voiceChannels.map((channel) => (
+          <div key={channel.__id}>
+            <Button
+              variant={channel.__id === voiceChannelId ? "secondary" : "ghost"}
+              className="w-full justify-start"
+              onClick={() => onJoinVoiceChannel(channel.__id)}
+            >
+              <Volume2 className="w-4 h-4 mr-1" />
+              {channel.name}
+            </Button>
+            {voicePeers[channel.__id]?.map((user) => (
+              <div key={user} className="pl-8 py-1 text-sm text-muted-foreground">
+                {user}
+              </div>
+            ))}
+          </div>
         ))}
       </div>
     </div>
