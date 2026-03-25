@@ -30,6 +30,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
   const [screenTracks, setScreenTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
+  const [screenAudioUsers, setScreenAudioUsers] = useState<Set<string>>(new Set());
   const [focusedVideoUsers, setFocusedVideoUsers] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
@@ -121,6 +122,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         // Sync isScreenSharing for local user
         if (user === username) setIsScreenSharing(!!track);
       },
+      onScreenAudioChange: (user, available) => {
+        setScreenAudioUsers((prev) => {
+          const next = new Set(prev);
+          if (available) next.add(user);
+          else next.delete(user);
+          return next;
+        });
+      },
     });
 
     // Handle server pushes for voice state and presence
@@ -200,8 +209,11 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           peerPings={peerPings}
           videoTracks={videoTracks}
           screenTracks={screenTracks}
+          screenAudioUsers={screenAudioUsers}
           focusedFeeds={focusedVideoUsers}
           onSelectTextChannel={setSelectedTextChannelId}
+          onScreenAudioVolume={(user, vol) => voiceRef.current?.setScreenAudioVolume(user, vol)}
+          onScreenAudioMute={(user, muted) => voiceRef.current?.setScreenAudioMuted(user, muted)}
           onJoinVoiceChannel={joinVoiceChannel}
           onFocusVideo={(user) => {
             setFocusedVideoUsers((prev) => {

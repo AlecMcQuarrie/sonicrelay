@@ -33,6 +33,7 @@ type VoiceHandlers = {
   onSpeakingChange: (username: string, isSpeaking: boolean) => void;
   onVideoTrack: (username: string, track: MediaStreamTrack | null) => void;
   onScreenTrack: (username: string, track: MediaStreamTrack | null) => void;
+  onScreenAudioChange: (username: string, available: boolean) => void;
 };
 
 export class VoiceClient {
@@ -43,12 +44,15 @@ export class VoiceClient {
   private videoProducer: types.Producer | null = null;
   private videoStream: MediaStream | null = null;
   private screenProducer: types.Producer | null = null;
+  private screenAudioProducer: types.Producer | null = null;
   private screenStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
   private audioElements = new Map<string, HTMLAudioElement>();
   private videoProducerIds = new Set<string>(); // producer IDs that are camera video
-  private screenProducerIds = new Set<string>(); // producer IDs that are screen share
-  private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen'
+  private screenProducerIds = new Set<string>(); // producer IDs that are screen share video
+  private screenAudioProducerIds = new Set<string>(); // producer IDs that are screen share audio
+  private screenAudioElements = new Map<string, HTMLAudioElement>(); // username -> audio element
+  private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen' | 'screen-audio'
   private ws: WebSocket;
   private channelId: string | null = null;
   private handlers: VoiceHandlers;
@@ -196,7 +200,18 @@ export class VoiceClient {
       return;
     }
 
-    // Play the received audio
+    // Screen share audio — track separately for per-user volume control
+    if (source === 'screen-audio' && remoteUsername) {
+      this.screenAudioProducerIds.add(producerId);
+      const audio = new Audio();
+      audio.srcObject = new MediaStream([consumer.track]);
+      audio.play();
+      this.screenAudioElements.set(remoteUsername, audio);
+      this.handlers.onScreenAudioChange(remoteUsername, true);
+      return;
+    }
+
+    // Play the received mic audio
     const audio = new Audio();
     audio.srcObject = new MediaStream([consumer.track]);
     audio.play();
@@ -221,7 +236,14 @@ export class VoiceClient {
 
     const username = this.producerUsernames.get(producerId);
 
-    if (this.screenProducerIds.has(producerId)) {
+    if (this.screenAudioProducerIds.has(producerId)) {
+      this.screenAudioProducerIds.delete(producerId);
+      if (username) {
+        const audio = this.screenAudioElements.get(username);
+        if (audio) { audio.srcObject = null; this.screenAudioElements.delete(username); }
+        this.handlers.onScreenAudioChange(username, false);
+      }
+    } else if (this.screenProducerIds.has(producerId)) {
       this.screenProducerIds.delete(producerId);
       if (username) this.handlers.onScreenTrack(username, null);
     } else if (this.videoProducerIds.has(producerId)) {
@@ -329,13 +351,19 @@ export class VoiceClient {
 
   async startScreenShare() {
     if (!this.sendTransport || !this.channelId || this.screenProducer) return;
-    this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     const screenTrack = this.screenStream.getVideoTracks()[0];
 
     // Browser "Stop sharing" button closes the track — handle it
     screenTrack.onended = () => { this.stopScreenShare(); };
 
     this.screenProducer = await this.sendTransport.produce({ track: screenTrack, appData: { source: 'screen' } });
+
+    // Produce screen audio if the user shared a tab/window with audio
+    const audioTrack = this.screenStream.getAudioTracks()[0];
+    if (audioTrack) {
+      this.screenAudioProducer = await this.sendTransport.produce({ track: audioTrack, appData: { source: 'screen-audio' } });
+    }
 
     if (this.localUsername) {
       this.handlers.onScreenTrack(this.localUsername, screenTrack);
@@ -344,6 +372,14 @@ export class VoiceClient {
 
   async stopScreenShare() {
     if (!this.screenProducer || !this.channelId) return;
+
+    // Close screen audio producer first
+    if (this.screenAudioProducer) {
+      const audioProducerId = this.screenAudioProducer.id;
+      try { await request(this.ws, 'close-producer', { channelId: this.channelId, producerId: audioProducerId }); } catch {}
+      this.screenAudioProducer.close();
+      this.screenAudioProducer = null;
+    }
 
     const producerId = this.screenProducer.id;
     try {
@@ -389,6 +425,15 @@ export class VoiceClient {
       this.handlers.onScreenTrack(this.localUsername, null);
     }
     this.screenProducerIds.clear();
+
+    // Clean up screen audio
+    for (const producerId of this.screenAudioProducerIds) {
+      const username = this.producerUsernames.get(producerId);
+      if (username) this.handlers.onScreenAudioChange(username, false);
+    }
+    this.screenAudioProducerIds.clear();
+    this.screenAudioElements.forEach((a) => { a.srcObject = null; });
+    this.screenAudioElements.clear();
     this.producerSources.clear();
 
     // Notify server, but don't let a dead WebSocket block cleanup
@@ -398,6 +443,7 @@ export class VoiceClient {
     this.audioProducer?.close();
     this.videoProducer?.close();
     this.screenProducer?.close();
+    this.screenAudioProducer?.close();
     this.sendTransport?.close();
     this.recvTransport?.close();
     this.consumers.forEach((c) => c.close());
@@ -407,11 +453,22 @@ export class VoiceClient {
     this.audioProducer = null;
     this.videoProducer = null;
     this.screenProducer = null;
+    this.screenAudioProducer = null;
     this.sendTransport = null;
     this.recvTransport = null;
     this.device = null;
     this.channelId = null;
     this.localUsername = null;
+  }
+
+  setScreenAudioVolume(username: string, volume: number) {
+    const audio = this.screenAudioElements.get(username);
+    if (audio) audio.volume = Math.max(0, Math.min(1, volume));
+  }
+
+  setScreenAudioMuted(username: string, muted: boolean) {
+    const audio = this.screenAudioElements.get(username);
+    if (audio) audio.muted = muted;
   }
 
   destroy() {

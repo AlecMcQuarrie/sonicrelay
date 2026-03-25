@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
-import { Hash, Volume2 } from "lucide-react";
+import { Hash, Volume2, VolumeX } from "lucide-react";
 
 type Channel = {
   name: string;
@@ -18,16 +18,58 @@ interface ChannelSidebarProps {
   peerPings: Record<string, number>;
   videoTracks: Map<string, MediaStreamTrack>;
   screenTracks: Map<string, MediaStreamTrack>;
+  screenAudioUsers: Set<string>;
   focusedFeeds: Set<string>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
   onFocusVideo: (key: string) => void;
+  onScreenAudioVolume: (username: string, volume: number) => void;
+  onScreenAudioMute: (username: string, muted: boolean) => void;
 }
 
 function pingColor(ms: number): string {
   if (ms < 80) return "text-green-500";
   if (ms < 150) return "text-yellow-500";
   return "text-red-500";
+}
+
+function ScreenAudioControls({ username, onVolume, onMute }: {
+  username: string;
+  onVolume: (username: string, volume: number) => void;
+  onMute: (username: string, muted: boolean) => void;
+}) {
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+
+  return (
+    <div className="flex items-center gap-1 py-0.5">
+      <button
+        className="shrink-0 p-0.5 rounded hover:bg-muted"
+        onClick={() => {
+          const next = !muted;
+          setMuted(next);
+          onMute(username, next);
+        }}
+      >
+        {muted
+          ? <VolumeX className="w-3.5 h-3.5 text-red-500" />
+          : <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />}
+      </button>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.05"
+        value={volume}
+        className="w-full h-1 accent-foreground"
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          setVolume(v);
+          onVolume(username, v);
+        }}
+      />
+    </div>
+  );
 }
 
 function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () => void }) {
@@ -60,10 +102,13 @@ export default function ChannelSidebar({
   peerPings,
   videoTracks,
   screenTracks,
+  screenAudioUsers,
   focusedFeeds,
   onSelectTextChannel,
   onJoinVoiceChannel,
   onFocusVideo,
+  onScreenAudioVolume,
+  onScreenAudioMute,
 }: ChannelSidebarProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
@@ -122,6 +167,9 @@ export default function ChannelSidebar({
                 )}
                 {screenTracks.has(user) && !focusedFeeds.has(`screen:${user}`) && (
                   <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
+                )}
+                {screenAudioUsers.has(user) && (
+                  <ScreenAudioControls username={user} onVolume={onScreenAudioVolume} onMute={onScreenAudioMute} />
                 )}
               </div>
             ))}
