@@ -31,7 +31,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   // Fetch messages for this channel
   useEffect(() => {
     setMessages([]);
-    fetch(`http://${serverIP}/channels/${channelId}/messages`, {
+    const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+    fetch(`${protocol}://${serverIP}/channels/${channelId}/messages`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())

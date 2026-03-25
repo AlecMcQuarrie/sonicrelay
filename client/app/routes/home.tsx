@@ -32,7 +32,8 @@ export default function Home() {
   }, []);
 
   const joinServer = useCallback(async (serverIP: string, username: string, password: string, isRegistration: boolean) => {
-    const response = await fetch(`http://${serverIP}/${isRegistration ? 'signup' : 'login'}`, {
+    const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+    const response = await fetch(`${protocol}://${serverIP}/${isRegistration ? 'signup' : 'login'}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

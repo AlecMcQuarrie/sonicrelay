@@ -47,7 +47,7 @@ if (Channels.getAll().length === 0) {
 }
 
 const cors = require('cors');
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({ origin: true }));
 
 // parse application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true }));

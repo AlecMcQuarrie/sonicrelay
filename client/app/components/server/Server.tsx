@@ -27,7 +27,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
-    fetch(`http://${serverIP}/channels`, {
+    const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+    const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
+
+    fetch(`${protocol}://${serverIP}/channels`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
@@ -37,7 +40,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         if (firstText) setSelectedTextChannelId(firstText.__id);
       });
 
-    const ws = new WebSocket(`ws://${serverIP}?token=${accessToken}`);
+    const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
 
     // Initialize voice client
