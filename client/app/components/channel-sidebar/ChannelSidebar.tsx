@@ -19,6 +19,7 @@ interface ChannelSidebarProps {
   videoTracks: Map<string, MediaStreamTrack>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
+  onFocusVideo: (username: string) => void;
 }
 
 function pingColor(ms: number): string {
@@ -27,7 +28,7 @@ function pingColor(ms: number): string {
   return "text-red-500";
 }
 
-function PeerVideo({ track }: { track: MediaStreamTrack }) {
+function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -36,7 +37,7 @@ function PeerVideo({ track }: { track: MediaStreamTrack }) {
   }, [track]);
 
   return (
-    <div className="aspect-video bg-black rounded overflow-hidden">
+    <div className="aspect-video bg-black rounded overflow-hidden cursor-pointer" onClick={onClick}>
       <video
         ref={videoRef}
         autoPlay
@@ -58,6 +59,7 @@ export default function ChannelSidebar({
   videoTracks,
   onSelectTextChannel,
   onJoinVoiceChannel,
+  onFocusVideo,
 }: ChannelSidebarProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
@@ -112,7 +114,7 @@ export default function ChannelSidebar({
                   )}
                 </div>
                 {videoTracks.has(user) && (
-                  <PeerVideo track={videoTracks.get(user)!} />
+                  <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(user)} />
                 )}
               </div>
             ))}

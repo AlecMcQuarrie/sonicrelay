@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
+import FocusedVideo from "~/components/focused-video/FocusedVideo";
 import TextChannel from "~/components/text-channel/TextChannel";
 import UserList from "~/components/user-list/UserList";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
@@ -27,6 +28,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [videoTracks, setVideoTracks] = useState<Map<string, MediaStreamTrack>>(new Map());
+  const [focusedVideoUser, setFocusedVideoUser] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
@@ -85,7 +87,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         setVideoTracks((prev) => {
           const next = new Map(prev);
           if (track) next.set(user, track);
-          else next.delete(user);
+          else {
+            next.delete(user);
+            setFocusedVideoUser((prev) => prev === user ? null : prev);
+          }
           return next;
         });
       },
@@ -159,6 +164,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           videoTracks={videoTracks}
           onSelectTextChannel={setSelectedTextChannelId}
           onJoinVoiceChannel={joinVoiceChannel}
+          onFocusVideo={setFocusedVideoUser}
         />
         {currentVoiceChannel && (
           <VoiceControls
@@ -171,20 +177,29 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           />
         )}
       </div>
-      {selectedTextChannel ? (
-        <TextChannel
-          serverIP={serverIP}
-          channelId={selectedTextChannel.__id}
-          channelName={selectedTextChannel.name}
-          accessToken={accessToken}
-          username={username}
-          wsRef={wsRef}
-        />
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          Select a channel
-        </div>
-      )}
+      <div className="flex-1 relative overflow-hidden">
+        {selectedTextChannel ? (
+          <TextChannel
+            serverIP={serverIP}
+            channelId={selectedTextChannel.__id}
+            channelName={selectedTextChannel.name}
+            accessToken={accessToken}
+            username={username}
+            wsRef={wsRef}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-muted-foreground">
+            Select a channel
+          </div>
+        )}
+        {focusedVideoUser && videoTracks.has(focusedVideoUser) && (
+          <FocusedVideo
+            username={focusedVideoUser}
+            track={videoTracks.get(focusedVideoUser)!}
+            onClose={() => setFocusedVideoUser(null)}
+          />
+        )}
+      </div>
       <div className="w-52 border-l h-screen">
         <UserList users={allUsers} onlineUsers={onlineUsers} />
       </div>

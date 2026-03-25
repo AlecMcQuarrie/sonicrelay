@@ -75,7 +75,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   }, [input, username, channelId, wsRef]);
 
   return (
-    <div className="flex flex-col h-screen flex-1">
+    <div className="flex flex-col h-full">
       {/* Channel header */}
       <div className="p-4 border-b font-bold">
         # {channelName}
