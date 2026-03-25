@@ -207,8 +207,26 @@ const wss = new WebSocketServer({
   }
 });
 
+// Ping all clients every 25 seconds to keep connections alive through proxies
+const PING_INTERVAL = 25000;
+const pingInterval = setInterval(() => {
+  for (const [ws, client] of clients) {
+    if ((ws as any).isAlive === false) {
+      // Didn't respond to last ping — connection is dead
+      ws.terminate();
+      continue;
+    }
+    (ws as any).isAlive = false;
+    ws.ping();
+  }
+}, PING_INTERVAL);
+
+wss.on('close', () => clearInterval(pingInterval));
+
 wss.on('connection', (ws, req: RipV2IncomingMessage) => {
   const username = req.username!;
+  (ws as any).isAlive = true;
+  ws.on('pong', () => { (ws as any).isAlive = true; });
   clients.set(ws, { username, voiceChannelId: null });
 
   // Send current voice state on connect

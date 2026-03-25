@@ -4,10 +4,19 @@ import type { types } from 'mediasoup-client';
 // Send a voice request over WebSocket and await the matching response
 function request(ws: WebSocket, action: string, data: Record<string, any> = {}): Promise<any> {
   return new Promise((resolve, reject) => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      reject(new Error('WebSocket is not open'));
+      return;
+    }
     const requestId = crypto.randomUUID();
+    const timeout = setTimeout(() => {
+      ws.removeEventListener('message', handler);
+      reject(new Error(`Request "${action}" timed out`));
+    }, 10000);
     const handler = (event: MessageEvent) => {
       const msg = JSON.parse(event.data);
       if (msg.requestId === requestId) {
+        clearTimeout(timeout);
         ws.removeEventListener('message', handler);
         if (msg.error) reject(new Error(msg.error));
         else resolve(msg);
@@ -251,8 +260,9 @@ export class VoiceClient {
 
   async leave() {
     this.stopLevelMonitoring();
+    // Notify server, but don't let a dead WebSocket block cleanup
     if (this.channelId) {
-      await request(this.ws, 'leave', { channelId: this.channelId });
+      try { await request(this.ws, 'leave', { channelId: this.channelId }); } catch {}
     }
     this.audioProducer?.close();
     this.sendTransport?.close();
