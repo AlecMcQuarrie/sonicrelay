@@ -92,9 +92,17 @@ export default function AudioPlayer({ src }: AudioPlayerProps) {
       <span className="text-xs text-muted-foreground w-8 shrink-0">
         {formatTime(duration)}
       </span>
-      <Button variant="ghost" size="icon-xs" onClick={toggleMute}>
+      <Button variant="ghost" size="icon-xs" onClick={toggleMute} className="shrink-0">
         {muted || volume === 0 ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
       </Button>
+      <Slider
+        value={[muted ? 0 : volume]}
+        min={0}
+        max={1}
+        step={0.05}
+        onValueChange={changeVolume}
+        className="w-16"
+      />
     </div>
   );
 }
