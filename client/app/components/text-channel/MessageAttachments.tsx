@@ -7,6 +7,7 @@ interface MessageAttachmentsProps {
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.ogg', '.mov'];
+const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
 
 function getExt(url: string): string {
   return url.substring(url.lastIndexOf('.')).toLowerCase();
@@ -42,6 +43,14 @@ export default function MessageAttachments({ attachments, serverIP }: MessageAtt
             <video key={i} controls className="max-w-sm max-h-72 rounded border">
               <source src={fullUrl} />
             </video>
+          );
+        }
+
+        if (AUDIO_EXTS.includes(ext)) {
+          return (
+            <audio key={i} controls className="max-w-sm">
+              <source src={fullUrl} />
+            </audio>
           );
         }
 
