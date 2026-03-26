@@ -384,7 +384,10 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
     // ── Delete message ──
     if (msg.type === 'delete-message') {
-      const message = Messages.get((m) => m.$id === msg.messageId);
+      const allMsgs = Messages.getAll();
+      console.log('first msg keys:', allMsgs.length > 0 ? Object.keys(allMsgs[0]) : 'none');
+      console.log('first msg sample:', allMsgs.length > 0 ? JSON.stringify(allMsgs[0]).substring(0, 200) : 'none');
+      const message = allMsgs.find((m: any) => m.__id === msg.messageId || m.$id === msg.messageId);
       console.log('delete-message', { messageId: msg.messageId, found: !!message, sender: message?.sender, username });
       if (!message || message.sender !== username) return;
       // Delete attachment files from disk
