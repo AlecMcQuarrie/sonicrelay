@@ -190,7 +190,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           className="hidden"
           onChange={handleFileSelect}
         />
-        <div className="flex items-end gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
+        <div className="flex items-center gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
           <textarea
             ref={textareaRef}
             placeholder={`Message #${channelName}`}
