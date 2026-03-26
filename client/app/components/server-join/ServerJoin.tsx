@@ -28,7 +28,7 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
 
   return (
     <div className="max-w-sm m-auto flex flex-col h-screen justify-center">
-      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px"}}><strong>WELCOME TO RIPCORD</strong></h1>
+      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px"}}><strong>[WELCOME TO RIPCORD]</strong></h1>
       <Card style={{ textAlign: 'center' }}>
         <CardHeader>
           <CardTitle>Login to The Server</CardTitle>
