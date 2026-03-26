@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "~/components/ui/button";
-import { Paperclip, X, FileIcon, Trash2 } from "lucide-react";
+import { Paperclip, X, FileIcon, Trash2, SendHorizontal } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 
 type Message = {
@@ -28,6 +27,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [uploading, setUploading] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
@@ -182,7 +182,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       )}
 
       {/* Input */}
-      <div className="p-4 flex gap-2">
+      <div className="p-4">
         <input
           ref={fileInputRef}
           type="file"
@@ -190,25 +190,44 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           className="hidden"
           onChange={handleFileSelect}
         />
-        <Button variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()}>
-          <Paperclip className="w-5 h-5" />
-        </Button>
-        <textarea
-          placeholder={`Message #${channelName}`}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !uploading) {
-              e.preventDefault();
-              sendMessage();
-            }
-          }}
-          rows={1}
-          className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-        <Button onClick={sendMessage} disabled={(!input.trim() && pendingFiles.length === 0) || uploading}>
-          {uploading ? "..." : "Send"}
-        </Button>
+        <div className="flex items-end gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
+          <textarea
+            ref={textareaRef}
+            placeholder={`Message #${channelName}`}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              const el = textareaRef.current;
+              if (el) {
+                el.style.height = "auto";
+                const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 20;
+                el.style.height = Math.min(el.scrollHeight, lineHeight * 6) + "px";
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !uploading) {
+                e.preventDefault();
+                sendMessage();
+                if (textareaRef.current) textareaRef.current.style.height = "auto";
+              }
+            }}
+            rows={1}
+            className="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => { sendMessage(); if (textareaRef.current) textareaRef.current.style.height = "auto"; }}
+            disabled={(!input.trim() && pendingFiles.length === 0) || uploading}
+            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1 disabled:opacity-50 disabled:pointer-events-none"
+          >
+            <SendHorizontal className="w-5 h-5" />
+          </button>
+        </div>
       </div>
     </div>
   );
