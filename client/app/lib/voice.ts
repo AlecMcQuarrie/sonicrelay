@@ -131,7 +131,10 @@ export class VoiceClient {
     });
 
     // Produce audio from microphone
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const preferredAudio = localStorage.getItem("preferredAudioDevice");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: preferredAudio ? { deviceId: { exact: preferredAudio } } : true,
+    });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
     // Monitor local mic audio levels
@@ -317,7 +320,10 @@ export class VoiceClient {
 
   async startVideo() {
     if (!this.sendTransport || !this.channelId || this.videoProducer) return;
-    this.videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const preferredVideo = localStorage.getItem("preferredVideoDevice");
+    this.videoStream = await navigator.mediaDevices.getUserMedia({
+      video: preferredVideo ? { deviceId: { exact: preferredVideo } } : true,
+    });
     const videoTrack = this.videoStream.getVideoTracks()[0];
     this.videoProducer = await this.sendTransport.produce({ track: videoTrack, appData: { source: 'camera' } });
 

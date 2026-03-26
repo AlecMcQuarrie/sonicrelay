@@ -3,6 +3,7 @@ import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import FocusedVideo from "~/components/focused-video/FocusedVideo";
 import TextChannel from "~/components/text-channel/TextChannel";
 import UserList from "~/components/user-list/UserList";
+import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { VoiceClient } from "~/lib/voice";
 
@@ -33,6 +34,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [screenAudioUsers, setScreenAudioUsers] = useState<Set<string>>(new Set());
   const [focusedVideoUsers, setFocusedVideoUsers] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<string[]>([]);
+  const [profilePhotos, setProfilePhotos] = useState<Record<string, string | null>>({});
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
@@ -58,6 +60,11 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       .then((res) => res.json())
       .then((data) => {
         setAllUsers(data.users.map((u: { username: string }) => u.username));
+        const photos: Record<string, string | null> = {};
+        data.users.forEach((u: { username: string; profilePhoto: string | null }) => {
+          photos[u.username] = u.profilePhoto;
+        });
+        setProfilePhotos(photos);
       });
 
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
@@ -239,6 +246,13 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             onDisconnect={leaveVoiceChannel}
           />
         )}
+        <UserPanel
+          username={username}
+          serverIP={serverIP}
+          profilePhoto={profilePhotos[username]}
+          accessToken={accessToken}
+          onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
+        />
       </div>
       <div className="flex-1 relative overflow-hidden">
         {selectedTextChannel ? (
@@ -249,6 +263,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             accessToken={accessToken}
             username={username}
             wsRef={wsRef}
+            profilePhotos={profilePhotos}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -280,7 +295,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         })()}
       </div>
       <div className="w-52 border-l h-screen">
-        <UserList users={allUsers} onlineUsers={onlineUsers} />
+        <UserList users={allUsers} onlineUsers={onlineUsers} profilePhotos={profilePhotos} serverIP={serverIP} />
       </div>
     </div>
   );

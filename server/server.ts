@@ -23,6 +23,7 @@ const db = new Database();
 type User = {
   username: string;
   password: string;
+  profilePhoto: string | null;
   $id: string;
 };
 const Users = db.createCollection<User>("users");
@@ -95,6 +96,7 @@ app.post("/signup", async (req: Request, res: Response) => {
   const user = {
     username: req.body.username,
     password: password,
+    profilePhoto: null,
   };
   Users.create(user);
 
@@ -131,9 +133,21 @@ app.post("/me", (req: Request, res: Response) => {
   const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
-    return res.status(200).json({ username });
+    const user = Users.get((u) => u.username === username);
+    return res.status(200).json({ username, profilePhoto: user?.profilePhoto || null });
   }
   return res.sendStatus(401);
+});
+
+app.put("/me/profile-photo", upload.single('file'), (req: Request, res: Response) => {
+  const accessToken = req.headers["access-token"] as string;
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (!username) return res.sendStatus(401);
+  const file = req.file as Express.Multer.File;
+  if (!file) return res.sendStatus(400);
+  const url = `/uploads/${file.filename}`;
+  Users.update((u) => { u.profilePhoto = url; }, (u) => u.username === username);
+  return res.status(200).json({ profilePhoto: url });
 });
 
 // Channel endpoints
@@ -161,7 +175,7 @@ app.get("/users", (req: Request, res: Response) => {
   const accessToken = req.headers["access-token"];
   const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
   if (username) {
-    const users = Users.getAll().map((u) => ({ username: u.username }));
+    const users = Users.getAll().map((u) => ({ username: u.username, profilePhoto: u.profilePhoto || null }));
     return res.status(200).json({ users });
   }
   return res.sendStatus(401);

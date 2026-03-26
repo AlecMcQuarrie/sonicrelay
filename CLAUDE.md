@@ -1,6 +1,8 @@
 # RipV2 (Ripcord)
 
-A Discord alternative built from scratch. Text channels, voice channels, screen sharing — all self-hosted.
+A decentralized Discord alternative built from scratch. Text channels, voice channels, screen sharing — fully self-hosted and community-owned.
+
+Anyone can download a packaged server and client, spin up their own instance, and use it with their own friend group. No central authority, no data collection, no Terms of Service changes — just you and your people on your own hardware.
 
 ## Philosophy
 

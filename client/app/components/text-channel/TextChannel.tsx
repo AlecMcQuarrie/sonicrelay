@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Paperclip, X, FileIcon, Trash2, SendHorizontal } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
+import Avatar from "~/components/ui/avatar";
 
 type Message = {
   __id?: string;
@@ -18,9 +19,10 @@ interface TextChannelProps {
   accessToken: string;
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
+  profilePhotos: Record<string, string | null>;
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef }: TextChannelProps) {
+export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos }: TextChannelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -132,8 +134,12 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2">
-        {messages.map((msg, i) => (
+        {messages.map((msg, i) => {
+          const photo = profilePhotos[msg.sender];
+          const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+          return (
           <div key={msg.__id || i} className="min-w-0 group flex gap-2 items-start">
+            <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
             <div className="flex-1 min-w-0">
               <span className="font-bold">{msg.sender}</span>{" "}
               <span className="text-xs text-muted-foreground">
@@ -153,7 +159,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
               </button>
             )}
           </div>
-        ))}
+          );
+        })}
         <div ref={bottomRef} />
       </div>
 

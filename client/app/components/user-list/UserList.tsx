@@ -1,11 +1,15 @@
 import { Users } from "lucide-react";
+import Avatar from "~/components/ui/avatar";
 
 interface UserListProps {
   users: string[];
   onlineUsers: Set<string>;
+  profilePhotos: Record<string, string | null>;
+  serverIP: string;
 }
 
-export default function UserList({ users, onlineUsers }: UserListProps) {
+export default function UserList({ users, onlineUsers, profilePhotos, serverIP }: UserListProps) {
+  const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
   const sorted = [...users].sort((a, b) => {
     const aOnline = onlineUsers.has(a);
     const bOnline = onlineUsers.has(b);
@@ -14,6 +18,11 @@ export default function UserList({ users, onlineUsers }: UserListProps) {
   });
 
   const onlineCount = sorted.filter((u) => onlineUsers.has(u)).length;
+
+  const photoUrl = (username: string) => {
+    const photo = profilePhotos[username];
+    return photo ? `${protocol}://${serverIP}${photo}` : null;
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -27,13 +36,11 @@ export default function UserList({ users, onlineUsers }: UserListProps) {
           return (
             <div
               key={user}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-sm ${online ? "text-foreground" : "text-muted-foreground/50"
-                }`}
+              className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-sm ${
+                online ? "text-foreground" : "text-muted-foreground/50"
+              }`}
             >
-              <span
-                className={`inline-block w-2 h-2 rounded-full shrink-0 ${online ? "bg-green-500" : "bg-muted-foreground/30"
-                  }`}
-              />
+              <Avatar username={user} profilePhoto={photoUrl(user)} size="sm" />
               {user}
             </div>
           );
