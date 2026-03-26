@@ -385,6 +385,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     // ── Delete message ──
     if (msg.type === 'delete-message') {
       const message = Messages.get((m) => m.$id === msg.messageId);
+      console.log('delete-message', { messageId: msg.messageId, found: !!message, sender: message?.sender, username });
       if (!message || message.sender !== username) return;
       // Delete attachment files from disk
       for (const url of message.attachments || []) {
