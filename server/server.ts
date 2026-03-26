@@ -7,6 +7,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import "dotenv/config";
 import * as voice from './voice';
+import multer from 'multer';
+import path from 'path';
+import crypto from 'crypto';
 
 type RipV2IncomingMessage = IncomingMessage & {
   username?: string;
@@ -36,6 +39,7 @@ type Message = {
   messageContent: string;
   sender: string;
   timestamp: string;
+  attachments: string[];
   $id: string;
 };
 const Messages = db.createCollection<Message>("messages");
@@ -54,6 +58,19 @@ app.use(express.urlencoded({ extended: true }));
 
 // parse application/json
 app.use(express.json());
+
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// File upload via multer
+const storage = multer.diskStorage({
+  destination: path.join(__dirname, 'uploads'),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, crypto.randomUUID() + ext);
+  },
+});
+const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Server start
 const server = app.listen(port, async () => {
@@ -148,6 +165,16 @@ app.get("/users", (req: Request, res: Response) => {
     return res.status(200).json({ users });
   }
   return res.sendStatus(401);
+});
+
+// Upload endpoint
+app.post("/upload", upload.array('files', 10), (req: Request, res: Response) => {
+  const accessToken = req.headers["access-token"] as string;
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (!username) return res.sendStatus(401);
+  const files = req.files as Express.Multer.File[];
+  const urls = files.map((f) => `/uploads/${f.filename}`);
+  return res.status(200).json({ urls });
 });
 
 // Message endpoint
@@ -312,16 +339,19 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
     // ── Text message ──
     if (msg.type === 'text-message') {
+      const attachments: string[] = msg.attachments || [];
       const message = {
         type: 'text-message',
         channelId: msg.channelId,
         messageContent: msg.messageContent,
+        attachments,
         timestamp: new Date().toISOString(),
         sender: username,
       };
       Messages.create({
         channelId: msg.channelId,
         messageContent: msg.messageContent,
+        attachments,
         timestamp: message.timestamp,
         sender: username,
       });
