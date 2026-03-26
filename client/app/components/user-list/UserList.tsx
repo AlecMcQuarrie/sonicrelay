@@ -41,7 +41,12 @@ export default function UserList({ users, onlineUsers, profilePhotos, serverIP }
               }`}
             >
               <Avatar username={user} profilePhoto={photoUrl(user)} size="sm" />
-              {user}
+              <span className="flex-1 truncate">{user}</span>
+              <span
+                className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                  online ? "bg-green-500" : "bg-muted-foreground/30"
+                }`}
+              />
             </div>
           );
         })}

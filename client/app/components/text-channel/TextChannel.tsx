@@ -117,6 +117,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   };
 
   const deleteMessage = (messageId: string) => {
+    console.log('deleteMessage', { messageId, wsReady: wsRef.current?.readyState });
     if (!wsRef.current) return;
     wsRef.current.send(JSON.stringify({ type: 'delete-message', messageId }));
   };
@@ -152,8 +153,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
             </div>
             {msg.sender === username && msg.__id && (
               <button
-                onClick={() => deleteMessage(msg.__id!)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1"
+                onPointerDown={(e) => { e.stopPropagation(); deleteMessage(msg.__id!); }}
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
