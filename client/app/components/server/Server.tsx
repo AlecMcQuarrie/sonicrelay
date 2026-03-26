@@ -200,6 +200,9 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   return (
     <div className="flex h-screen">
       <div className="w-60 border-r flex flex-col h-screen">
+        <div className="p-4 border-b font-bold">
+          ripv2
+        </div>
         <ChannelSidebar
           channels={channels}
           selectedTextChannelId={selectedTextChannelId}

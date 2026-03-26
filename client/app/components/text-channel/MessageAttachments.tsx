@@ -1,8 +1,10 @@
 import { Download, FileIcon } from "lucide-react";
+import AudioPlayer from "./AudioPlayer";
 
 interface MessageAttachmentsProps {
   attachments: string[];
   serverIP: string;
+  onLoad?: () => void;
 }
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
@@ -17,7 +19,7 @@ function getFilename(url: string): string {
   return url.substring(url.lastIndexOf('/') + 1);
 }
 
-export default function MessageAttachments({ attachments, serverIP }: MessageAttachmentsProps) {
+export default function MessageAttachments({ attachments, serverIP, onLoad }: MessageAttachmentsProps) {
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
   return (
@@ -32,6 +34,7 @@ export default function MessageAttachments({ attachments, serverIP }: MessageAtt
               <img
                 src={fullUrl}
                 alt="attachment"
+                onLoad={onLoad}
                 className="max-w-xs max-h-60 rounded border object-contain cursor-pointer hover:opacity-90 transition-opacity"
               />
             </a>
@@ -47,11 +50,7 @@ export default function MessageAttachments({ attachments, serverIP }: MessageAtt
         }
 
         if (AUDIO_EXTS.includes(ext)) {
-          return (
-            <audio key={i} controls className="max-w-sm">
-              <source src={fullUrl} />
-            </audio>
-          );
+          return <AudioPlayer key={i} src={fullUrl} />;
         }
 
         return (

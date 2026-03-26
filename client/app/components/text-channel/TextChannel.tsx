@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Paperclip, X, FileIcon } from "lucide-react";
+import { Paperclip, X, FileIcon, Trash2 } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 
 type Message = {
+  __id?: string;
   channelId: string;
   messageContent: string;
   sender: string;
@@ -30,19 +31,30 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
+  const isInitialLoad = useRef(true);
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: isInitialLoad.current ? "instant" : "smooth" });
+  }, []);
+
   // Scroll to bottom when messages change
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom();
   }, [messages]);
 
   // Fetch messages for this channel
   useEffect(() => {
     setMessages([]);
+    isInitialLoad.current = true;
     fetch(`${protocol}://${serverIP}/channels/${channelId}/messages`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
-      .then((data) => setMessages(data.messages));
+      .then((data) => {
+        setMessages(data.messages);
+        // Allow a frame for render, then mark initial load done
+        requestAnimationFrame(() => { isInitialLoad.current = false; });
+      });
   }, [channelId, accessToken]);
 
   // Listen for incoming websocket messages for this channel
@@ -52,9 +64,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
     const handleMessage = (event: MessageEvent) => {
       const message = JSON.parse(event.data);
-      if (message.type !== 'text-message') return;
-      if (message.channelId === channelId) {
+      if (message.type === 'text-message' && message.channelId === channelId) {
         setMessages((prev) => [...prev, message]);
+      }
+      if (message.type === 'delete-message') {
+        setMessages((prev) => prev.filter((m) => m.__id !== message.messageId));
       }
     };
 
@@ -88,11 +102,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       type: 'text-message', channelId, messageContent: input, attachments,
     }));
 
-    // Add our own message locally (server doesn't echo back to sender)
-    setMessages((prev) => [
-      ...prev,
-      { channelId, messageContent: input, sender: username, timestamp: new Date().toISOString(), attachments },
-    ]);
     setInput("");
     setPendingFiles([]);
   }, [input, pendingFiles, username, channelId, wsRef]);
@@ -103,6 +112,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       setPendingFiles((prev) => [...prev, ...files]);
     }
     e.target.value = "";
+  };
+
+  const deleteMessage = (messageId: string) => {
+    if (!wsRef.current) return;
+    wsRef.current.send(JSON.stringify({ type: 'delete-message', messageId }));
   };
 
   const removePendingFile = (index: number) => {
@@ -119,14 +133,24 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       {/* Messages */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2">
         {messages.map((msg, i) => (
-          <div key={i} className="min-w-0">
-            <span className="font-bold">{msg.sender}</span>{" "}
-            <span className="text-xs text-muted-foreground">
-              {new Date(msg.timestamp).toLocaleTimeString()}
-            </span>
-            {msg.messageContent && <p className="whitespace-pre-wrap break-words">{msg.messageContent}</p>}
-            {msg.attachments && msg.attachments.length > 0 && (
-              <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+          <div key={msg.__id || i} className="min-w-0 group flex gap-2 items-start">
+            <div className="flex-1 min-w-0">
+              <span className="font-bold">{msg.sender}</span>{" "}
+              <span className="text-xs text-muted-foreground">
+                {new Date(msg.timestamp).toLocaleTimeString()}
+              </span>
+              {msg.messageContent && <p className="whitespace-pre-wrap break-words">{msg.messageContent}</p>}
+              {msg.attachments && msg.attachments.length > 0 && (
+                <MessageAttachments attachments={msg.attachments} serverIP={serverIP} onLoad={scrollToBottom} />
+              )}
+            </div>
+            {msg.sender === username && msg.__id && (
+              <button
+                onClick={() => deleteMessage(msg.__id!)}
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
             )}
           </div>
         ))}

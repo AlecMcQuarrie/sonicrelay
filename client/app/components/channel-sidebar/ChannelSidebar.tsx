@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Separator } from "~/components/ui/separator";
 import { Hash, Volume2, VolumeX } from "lucide-react";
 
 type Channel = {
@@ -118,7 +117,7 @@ export default function ChannelSidebar({
       <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
         Text Channels
       </div>
-      <div className="px-2 space-y-1">
+      <div className="px-2 pb-1 space-y-1">
         {textChannels.map((channel) => (
           <Button
             key={channel.__id}
@@ -131,8 +130,6 @@ export default function ChannelSidebar({
           </Button>
         ))}
       </div>
-
-      <Separator className="my-2" />
 
       <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
         Voice Channels

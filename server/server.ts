@@ -340,24 +340,41 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     // ── Text message ──
     if (msg.type === 'text-message') {
       const attachments: string[] = msg.attachments || [];
-      const message = {
-        type: 'text-message',
+      const timestamp = new Date().toISOString();
+      const stored = Messages.create({
         channelId: msg.channelId,
         messageContent: msg.messageContent,
         attachments,
-        timestamp: new Date().toISOString(),
-        sender: username,
-      };
-      Messages.create({
-        channelId: msg.channelId,
-        messageContent: msg.messageContent,
-        attachments,
-        timestamp: message.timestamp,
+        timestamp,
         sender: username,
       });
+      const message = {
+        type: 'text-message',
+        __id: stored.$id,
+        channelId: msg.channelId,
+        messageContent: msg.messageContent,
+        attachments,
+        timestamp,
+        sender: username,
+      };
+      // Echo back to sender so they get the __id
+      ws.send(JSON.stringify(message));
       for (const [client] of clients) {
         if (client !== ws && client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify(message));
+        }
+      }
+      return;
+    }
+
+    // ── Delete message ──
+    if (msg.type === 'delete-message') {
+      const message = Messages.get((m) => m.$id === msg.messageId);
+      if (!message || message.sender !== username) return;
+      Messages.remove((m) => m.$id === msg.messageId);
+      for (const [client] of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'delete-message', messageId: msg.messageId }));
         }
       }
       return;

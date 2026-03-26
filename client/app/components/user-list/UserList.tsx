@@ -17,11 +17,11 @@ export default function UserList({ users, onlineUsers }: UserListProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1">
-        <Users className="w-3.5 h-3.5" />
+      <div className="p-4 border-b font-bold flex items-center gap-2">
+        <Users className="w-4 h-4" />
         Members — {onlineCount} online
       </div>
-      <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         {sorted.map((user) => {
           const online = onlineUsers.has(user);
           return (
