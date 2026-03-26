@@ -1,10 +1,11 @@
 import { useRef, useState, useEffect } from "react";
 import { Button } from "~/components/ui/button";
 import { Slider } from "~/components/ui/slider";
-import { Play, Pause, Volume2, VolumeX } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Download } from "lucide-react";
 
 interface AudioPlayerProps {
   src: string;
+  filename?: string;
 }
 
 function formatTime(seconds: number): string {
@@ -13,7 +14,7 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export default function AudioPlayer({ src }: AudioPlayerProps) {
+export default function AudioPlayer({ src, filename }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -73,8 +74,17 @@ export default function AudioPlayer({ src }: AudioPlayerProps) {
   };
 
   return (
-    <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 max-w-sm">
+    <div className="rounded-md border bg-muted/50 px-3 py-2 max-w-sm space-y-1.5">
       <audio ref={audioRef} src={src} preload="metadata" />
+      {filename && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm truncate flex-1">{filename}</span>
+          <a href={src} download className="shrink-0 text-muted-foreground hover:text-foreground transition-colors">
+            <Download className="w-4 h-4" />
+          </a>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
       <Button variant="ghost" size="icon-xs" onClick={togglePlay}>
         {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
       </Button>
@@ -103,6 +113,7 @@ export default function AudioPlayer({ src }: AudioPlayerProps) {
         onValueChange={changeVolume}
         className="w-16"
       />
+      </div>
     </div>
   );
 }

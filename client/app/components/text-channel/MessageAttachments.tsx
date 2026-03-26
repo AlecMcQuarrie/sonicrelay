@@ -50,7 +50,7 @@ export default function MessageAttachments({ attachments, serverIP, onLoad }: Me
         }
 
         if (AUDIO_EXTS.includes(ext)) {
-          return <AudioPlayer key={i} src={fullUrl} />;
+          return <AudioPlayer key={i} src={fullUrl} filename={getFilename(url)} />;
         }
 
         return (
