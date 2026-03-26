@@ -60,7 +60,7 @@ Voice client logic lives in `lib/voice.ts` as a `VoiceClient` class that wraps m
 
 simpl.db is a lightweight JSON-based database. Important things to know:
 
-- **ID field mismatch**: In TypeScript types, simpl.db uses `$id` as the auto-generated ID field. However, when serialized to JSON (both in the collection files and in API responses), it becomes `__id`. Server-side code using the simpl.db API should reference `$id`. Client-side code receiving JSON over HTTP must use `__id`.
+- **ID field**: simpl.db uses `__id` as the auto-generated ID field everywhere at runtime — in filter callbacks, in `getAll()` results, in JSON serialization, and in API responses. The TypeScript types declare `$id` but it does not work in practice. Always use `__id` (cast with `as any` if needed to satisfy TypeScript).
 - **Collection files** live in `server/collections/` as plain JSON arrays.
 - **No migrations** — if you change a schema, you may need to delete the collection JSON file and let it re-seed.
 

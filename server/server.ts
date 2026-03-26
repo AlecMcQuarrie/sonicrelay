@@ -384,18 +384,14 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
     // ── Delete message ──
     if (msg.type === 'delete-message') {
-      const allMsgs = Messages.getAll();
-      console.log('first msg keys:', allMsgs.length > 0 ? Object.keys(allMsgs[0]) : 'none');
-      console.log('first msg sample:', allMsgs.length > 0 ? JSON.stringify(allMsgs[0]).substring(0, 200) : 'none');
-      const message = allMsgs.find((m: any) => m.__id === msg.messageId || m.$id === msg.messageId);
-      console.log('delete-message', { messageId: msg.messageId, found: !!message, sender: message?.sender, username });
+      const message = Messages.get((m: any) => m.__id === msg.messageId);
       if (!message || message.sender !== username) return;
       // Delete attachment files from disk
       for (const url of message.attachments || []) {
         const filePath = path.join(__dirname, url);
         fs.unlink(filePath, () => {});
       }
-      Messages.remove((m) => m.$id === msg.messageId);
+      Messages.remove((m: any) => m.__id === msg.messageId);
       for (const [client] of clients) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({ type: 'delete-message', messageId: msg.messageId }));
