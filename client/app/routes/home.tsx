@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Route } from "./+types/home";
 import ServerJoin from "~/components/server-join/ServerJoin";
+import Server from "~/components/server/Server";
 
-export function meta({}: Route.MetaArgs) {
+export function meta({ }: Route.MetaArgs) {
   return [
     { title: "RipV2" },
     {
@@ -30,23 +31,41 @@ export default function Home() {
     }
   }, []);
 
-  const joinServer = (serverIP: string, username: string, password: string) => {
-    const data = {
+  const joinServer = useCallback(async (serverIP: string, username: string, password: string, isRegistration: boolean) => {
+    const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+    const response = await fetch(`${protocol}://${serverIP}/${isRegistration ? 'signup' : 'login'}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username,
+        password,
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    const formattedConnectionData = {
       serverIP,
       username,
-      password, // THIS IS TEMPORARY! DO NOT STORE PASSWORDS IN PLAIN TEXT LOL
+      accessToken: data.accessToken
     };
-    localStorage.setItem("connectionData", JSON.stringify(data));
-    setConnectionData(data);
-  };
+    localStorage.setItem("connectionData", JSON.stringify(formattedConnectionData));
+    setConnectionData(formattedConnectionData);
+    setIsNewSession(false);
+  }, [setConnectionData, connectionData]);
 
   if (isNewSession) {
     return <ServerJoin submitForm={joinServer}></ServerJoin>;
   } else {
     return (
-      <>
-        <h1>hi</h1>
-      </>
+      <Server
+        serverIP={connectionData.serverIP}
+        accessToken={connectionData.accessToken}
+        username={connectionData.username}
+      />
     );
   }
 }

@@ -1,0 +1,26 @@
+{
+  "scripts": {
+    "start": "ts-node ./server.ts",
+    "build": "tsc",
+    "serve": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
+    "express": "^5.2.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@types/multer": "^2.1.0",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "jsonwebtoken": "^9.0.3",
+    "mediasoup": "^3.19.19",
+    "multer": "^2.1.1",
+    "simpl.db": "^2.13.0",
+    "ws": "^8.20.0"
+  }
+}
