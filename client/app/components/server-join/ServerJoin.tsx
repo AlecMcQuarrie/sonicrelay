@@ -28,35 +28,71 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
 
   return (
     <div className="max-w-sm m-auto flex flex-col h-screen justify-center">
-      <h1 style={{ textAlign: "center", marginBottom: '20px', fontSize: "24px"}}><strong>[WELCOME TO RIPCORD]</strong></h1>
-      <Card style={{ textAlign: 'center' }}>
+      <h1
+        style={{
+          textAlign: "center",
+          marginBottom: "0px",
+          fontSize: "24px"
+        }}
+      >
+        <strong>
+          <span>
+            <span style={{ fontSize: "32px" }}>[</span>
+            <span style={{ padding: "0 4px", position: "relative", top: "-2px" }}>RIPCORD V2</span>
+            <span style={{ fontSize: "32px" }}>]</span>
+          </span>
+        </strong>
+      </h1>
+      <h6 style={{ textAlign: "center", marginBottom: "30px" }}> // secure channel established</h6>
+      <Card>
         <CardHeader>
-          <CardTitle>Login to The Server</CardTitle>
-          <CardDescription>Enter Server Details to Login</CardDescription>
+          <CardTitle style={{ textAlign: "center", marginTop: "5px", marginBottom: "0px", fontSize: "20px" }}>Login to The Server</CardTitle>
+          <CardDescription style={{ textAlign: "center", marginBottom: "20px" }}>Enter Server Details to Login</CardDescription>
         </CardHeader>
         <CardContent>
           <form>
             <FieldGroup>
               <Field>
+                <h3>
+                  <h3 style={{ textAlign: "left" }}>
+                    {">>"}
+                    <span style={{ marginLeft: "12px" }}>SERVER IP</span>
+                  </h3>
+                </h3>
                 <Input
-                  placeholder="Server IP"
+                  placeholder="Enter Server IP"
+                  className="placeholder:italic"
                   value={serverIP}
                   onChange={(e) => setServerIP(e.target.value)}
                   required
                 />
               </Field>
               <Field>
+                <h3>
+                  <h3 style={{ textAlign: "left" }}>
+                    {">>"}
+                    <span style={{ marginLeft: "12px" }}>USERNAME</span>
+                  </h3>
+                </h3>
                 <Input
                   placeholder="Username"
+                  className="placeholder:italic"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
                 />
               </Field>
               <Field>
+                <h3>
+                  <h3 style={{ textAlign: "left" }}>
+                    {">>"}
+                    <span style={{ marginLeft: "12px" }}>PASSWORD</span>
+                  </h3>
+                </h3>
                 <Input
                   type="password"
                   placeholder="Password"
+                  className="placeholder:italic"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
