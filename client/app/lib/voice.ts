@@ -206,7 +206,7 @@ export class VoiceClient {
     // Screen share audio — track separately for per-user volume control
     if (source === 'screen-audio' && remoteUsername) {
       this.screenAudioProducerIds.add(producerId);
-      const audio = new Audio();
+      const audio = this.createAudioElement();
       audio.srcObject = new MediaStream([consumer.track]);
       audio.play();
       this.screenAudioElements.set(remoteUsername, audio);
@@ -215,7 +215,7 @@ export class VoiceClient {
     }
 
     // Play the received mic audio
-    const audio = new Audio();
+    const audio = this.createAudioElement();
     audio.srcObject = new MediaStream([consumer.track]);
     audio.play();
     this.audioElements.set(producerId, audio);
@@ -465,6 +465,15 @@ export class VoiceClient {
     this.device = null;
     this.channelId = null;
     this.localUsername = null;
+  }
+
+  private createAudioElement(): HTMLAudioElement {
+    const audio = new Audio();
+    const outputDevice = localStorage.getItem("preferredOutputDevice");
+    if (outputDevice && 'setSinkId' in audio) {
+      (audio as any).setSinkId(outputDevice).catch(() => {});
+    }
+    return audio;
   }
 
   setScreenAudioVolume(username: string, volume: number) {

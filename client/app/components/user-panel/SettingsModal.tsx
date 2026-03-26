@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Camera } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
+import PhotoCropModal from "./PhotoCropModal";
 
 interface SettingsModalProps {
   open: boolean;
@@ -17,8 +18,11 @@ type MediaDeviceOption = { deviceId: string; label: string };
 export default function SettingsModal({ open, onOpenChange, serverIP, accessToken, profilePhoto, onProfilePhotoChange }: SettingsModalProps) {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceOption[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceOption[]>([]);
+  const [outputDevices, setOutputDevices] = useState<MediaDeviceOption[]>([]);
   const [selectedAudio, setSelectedAudio] = useState(() => localStorage.getItem("preferredAudioDevice") || "");
   const [selectedVideo, setSelectedVideo] = useState(() => localStorage.getItem("preferredVideoDevice") || "");
+  const [selectedOutput, setSelectedOutput] = useState(() => localStorage.getItem("preferredOutputDevice") || "");
+  const [cropImage, setCropImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
@@ -33,6 +37,7 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
       .then((devices) => {
         setAudioDevices(devices.filter((d) => d.kind === "audioinput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Microphone" })));
         setVideoDevices(devices.filter((d) => d.kind === "videoinput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Camera" })));
+        setOutputDevices(devices.filter((d) => d.kind === "audiooutput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Speaker" })));
       })
       .catch(() => {});
   }, [open]);
@@ -47,11 +52,22 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
     localStorage.setItem("preferredVideoDevice", deviceId);
   };
 
-  const uploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const saveOutput = (deviceId: string) => {
+    setSelectedOutput(deviceId);
+    localStorage.setItem("preferredOutputDevice", deviceId);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const url = URL.createObjectURL(file);
+    setCropImage(url);
+    e.target.value = "";
+  };
+
+  const uploadCroppedPhoto = async (blob: Blob) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', blob, 'profile.jpg');
     const res = await fetch(`${protocol}://${serverIP}/me/profile-photo`, {
       method: 'PUT',
       headers: { "access-token": accessToken },
@@ -59,60 +75,83 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
     });
     const data = await res.json();
     onProfilePhotoChange(data.profilePhoto);
-    e.target.value = "";
+    setCropImage(null);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-              <Avatar username="" profilePhoto={profilePhoto} size="md" />
-              <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <Camera className="w-4 h-4 text-white" />
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                <Avatar username="" profilePhoto={profilePhoto} size="md" />
+                <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Camera className="w-4 h-4 text-white" />
+                </div>
               </div>
+              <span className="text-sm text-muted-foreground">Click to change photo</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileSelect}
+              />
             </div>
-            <span className="text-sm text-muted-foreground">Click to change photo</span>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={uploadPhoto}
-            />
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Microphone</label>
+              <select
+                value={selectedAudio}
+                onChange={(e) => saveAudio(e.target.value)}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Default</option>
+                {audioDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Playback Device</label>
+              <select
+                value={selectedOutput}
+                onChange={(e) => saveOutput(e.target.value)}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Default</option>
+                {outputDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Camera</label>
+              <select
+                value={selectedVideo}
+                onChange={(e) => saveVideo(e.target.value)}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Default</option>
+                {videoDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Microphone</label>
-            <select
-              value={selectedAudio}
-              onChange={(e) => saveAudio(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            >
-              <option value="">Default</option>
-              {audioDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Camera</label>
-            <select
-              value={selectedVideo}
-              onChange={(e) => saveVideo(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            >
-              <option value="">Default</option>
-              {videoDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      {cropImage && (
+        <PhotoCropModal
+          open={!!cropImage}
+          onOpenChange={(open) => { if (!open) setCropImage(null); }}
+          imageSrc={cropImage}
+          onCropComplete={uploadCroppedPhoto}
+        />
+      )}
+    </>
   );
 }
