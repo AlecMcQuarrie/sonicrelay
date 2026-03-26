@@ -98,8 +98,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   }, [input, pendingFiles, username, channelId, wsRef]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setPendingFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setPendingFiles((prev) => [...prev, ...files]);
     }
     e.target.value = "";
   };
