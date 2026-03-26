@@ -10,6 +10,7 @@ import * as voice from './voice';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
+import fs from 'fs';
 
 type RipV2IncomingMessage = IncomingMessage & {
   username?: string;
@@ -385,6 +386,11 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     if (msg.type === 'delete-message') {
       const message = Messages.get((m) => m.$id === msg.messageId);
       if (!message || message.sender !== username) return;
+      // Delete attachment files from disk
+      for (const url of message.attachments || []) {
+        const filePath = path.join(__dirname, url);
+        fs.unlink(filePath, () => {});
+      }
       Messages.remove((m) => m.$id === msg.messageId);
       for (const [client] of clients) {
         if (client.readyState === WebSocket.OPEN) {
