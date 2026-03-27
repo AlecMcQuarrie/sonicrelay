@@ -24,7 +24,7 @@ export default function VoiceControls({
       </div>
       <div className="flex gap-2">
         <Button variant="ghost" size="sm" onClick={onToggleMute}>
-          {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          {isMuted ? <MicOff className="w-4 h-4 text-red-500" /> : <Mic className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleDeafen}>
           {isDeafened ? <HeadphoneOff className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}

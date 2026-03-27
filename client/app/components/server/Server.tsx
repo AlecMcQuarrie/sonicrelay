@@ -185,6 +185,26 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       }
       if (msg.type === 'presence') {
         setOnlineUsers(new Set(msg.onlineUsers));
+        // If there are online users we haven't seen, re-fetch the full user list
+        setAllUsers((prev) => {
+          const known = new Set(prev);
+          const hasNew = msg.onlineUsers.some((u: string) => !known.has(u));
+          if (hasNew) {
+            fetch(`${protocol}://${serverIP}/users`, {
+              headers: { 'access-token': accessToken },
+            })
+              .then((res) => res.json())
+              .then((data) => {
+                setAllUsers(data.users.map((u: { username: string }) => u.username));
+                const photos: Record<string, string | null> = {};
+                data.users.forEach((u: { username: string; profilePhoto: string | null }) => {
+                  photos[u.username] = u.profilePhoto;
+                });
+                setProfilePhotos(photos);
+              });
+          }
+          return prev;
+        });
       }
       if (msg.type === 'voice-pings') {
         setPeerPings(msg.pings);
@@ -297,8 +317,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   return (
     <div className="flex h-screen">
       <div className="w-60 border-r flex flex-col h-screen">
-        <div className="p-4 border-b font-bold">
-          ripv2
+        <div className="px-4 py-1 border-b font-bold text-center">
+          <span className="text-[32px]">[</span>
+          <span className="relative -top-[2px] px-1 text-2xl">RIPCORD V2</span>
+          <span className="text-[32px]">]</span>
         </div>
         <ChannelSidebar
           channels={channels}
