@@ -29,15 +29,18 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
 
   useEffect(() => {
     if (!open) return;
-    navigator.mediaDevices.getUserMedia({ audio: true, video: true })
-      .then((stream) => {
-        stream.getTracks().forEach((t) => t.stop());
-        return navigator.mediaDevices.enumerateDevices();
-      })
+    // Request audio and video permissions separately so one failing doesn't block the other.
+    // Browsers only expose device labels for media kinds you've been granted permission for.
+    const requests = [
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => { s.getTracks().forEach((t) => t.stop()); }).catch(() => {}),
+      navigator.mediaDevices.getUserMedia({ video: true }).then((s) => { s.getTracks().forEach((t) => t.stop()); }).catch(() => {}),
+    ];
+    Promise.all(requests)
+      .then(() => navigator.mediaDevices.enumerateDevices())
       .then((devices) => {
-        setAudioDevices(devices.filter((d) => d.kind === "audioinput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Microphone" })));
-        setVideoDevices(devices.filter((d) => d.kind === "videoinput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Camera" })));
-        setOutputDevices(devices.filter((d) => d.kind === "audiooutput").map((d) => ({ deviceId: d.deviceId, label: d.label || "Speaker" })));
+        setAudioDevices(devices.filter((d) => d.kind === "audioinput" && d.deviceId).map((d) => ({ deviceId: d.deviceId, label: d.label || `Microphone (${d.deviceId.slice(0, 8)})` })));
+        setVideoDevices(devices.filter((d) => d.kind === "videoinput" && d.deviceId).map((d) => ({ deviceId: d.deviceId, label: d.label || `Camera (${d.deviceId.slice(0, 8)})` })));
+        setOutputDevices(devices.filter((d) => d.kind === "audiooutput" && d.deviceId).map((d) => ({ deviceId: d.deviceId, label: d.label || `Speaker (${d.deviceId.slice(0, 8)})` })));
       })
       .catch(() => {});
   }, [open]);
