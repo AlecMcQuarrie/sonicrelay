@@ -270,7 +270,7 @@ export class VoiceClient {
   }
 
   private startLevelMonitoring() {
-    const SPEAKING_THRESHOLD = 10; // RMS deviation from silence (0-128 scale)
+    const SPEAKING_THRESHOLD = 3; // RMS deviation from silence (0-128 scale)
     const bufferLength = 256; // matches fftSize on our analysers
     const dataArray = new Uint8Array(bufferLength);
 

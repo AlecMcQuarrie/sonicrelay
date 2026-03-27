@@ -147,6 +147,26 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       }
       if (msg.type === 'presence') {
         setOnlineUsers(new Set(msg.onlineUsers));
+        // If there are online users we haven't seen, re-fetch the full user list
+        setAllUsers((prev) => {
+          const known = new Set(prev);
+          const hasNew = msg.onlineUsers.some((u: string) => !known.has(u));
+          if (hasNew) {
+            fetch(`${protocol}://${serverIP}/users`, {
+              headers: { 'access-token': accessToken },
+            })
+              .then((res) => res.json())
+              .then((data) => {
+                setAllUsers(data.users.map((u: { username: string }) => u.username));
+                const photos: Record<string, string | null> = {};
+                data.users.forEach((u: { username: string; profilePhoto: string | null }) => {
+                  photos[u.username] = u.profilePhoto;
+                });
+                setProfilePhotos(photos);
+              });
+          }
+          return prev;
+        });
       }
       if (msg.type === 'voice-pings') {
         setPeerPings(msg.pings);
