@@ -36,8 +36,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [allUsers, setAllUsers] = useState<string[]>([]);
   const [profilePhotos, setProfilePhotos] = useState<Record<string, string | null>>({});
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+  const [selfMutedUsers, setSelfMutedUsers] = useState<Set<string>>(new Set());
+  const [deafenedUsers, setDeafenedUsers] = useState<Set<string>>(new Set());
+  const [isDeafened, setIsDeafened] = useState(false);
+  const [voicePeerSettings, setVoicePeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
+  const voicePeerSettingsRef = useRef(voicePeerSettings);
+  voicePeerSettingsRef.current = voicePeerSettings;
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
@@ -67,6 +73,12 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         setProfilePhotos(photos);
       });
 
+    fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setVoicePeerSettings(data.voicePeerSettings || {}));
+
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
 
@@ -78,6 +90,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           if (current.includes(user)) return prev;
           return { ...prev, [channelId]: [...current, user] };
         });
+        // Apply saved volume/mute settings once audio element is ready
+        setTimeout(() => {
+          const s = voicePeerSettingsRef.current[user];
+          if (s) {
+            voiceRef.current?.setUserVolume(user, s.volume);
+            voiceRef.current?.setUserMuted(user, s.muted);
+          }
+        }, 500);
       },
       onPeerLeft: (channelId, user) => {
         setVoicePeers((prev) => ({
@@ -144,6 +164,24 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       const msg = JSON.parse(event.data);
       if (msg.type === 'voice-state') {
         setVoicePeers(msg.voicePeers);
+        if (msg.mutedUsers) setSelfMutedUsers(new Set(msg.mutedUsers));
+        if (msg.deafenedUsers) setDeafenedUsers(new Set(msg.deafenedUsers));
+      }
+      if (msg.type === 'mute-state') {
+        setSelfMutedUsers((prev) => {
+          const next = new Set(prev);
+          if (msg.muted) next.add(msg.username);
+          else next.delete(msg.username);
+          return next;
+        });
+      }
+      if (msg.type === 'deafen-state') {
+        setDeafenedUsers((prev) => {
+          const next = new Set(prev);
+          if (msg.deafened) next.add(msg.username);
+          else next.delete(msg.username);
+          return next;
+        });
       }
       if (msg.type === 'presence') {
         setOnlineUsers(new Set(msg.onlineUsers));
@@ -169,6 +207,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setIsMuted(false);
     setIsCameraOn(false);
     setIsScreenSharing(false);
+    setIsDeafened(false);
+    // Apply saved volume/mute settings for existing peers
+    setTimeout(() => {
+      for (const [user, s] of Object.entries(voicePeerSettingsRef.current)) {
+        voiceRef.current?.setUserVolume(user, s.volume);
+        voiceRef.current?.setUserMuted(user, s.muted);
+      }
+    }, 500);
   }, [voiceChannelId, username]);
 
   const leaveVoiceChannel = useCallback(async () => {
@@ -177,12 +223,28 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setIsMuted(false);
     setIsCameraOn(false);
     setIsScreenSharing(false);
+    setIsDeafened(false);
   }, []);
 
   const toggleMute = useCallback(() => {
     const muted = voiceRef.current?.toggleMute() ?? false;
     setIsMuted(muted);
+    wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted }));
   }, []);
+
+  const toggleDeafen = useCallback(() => {
+    const next = !isDeafened;
+    setIsDeafened(next);
+    voiceRef.current?.setDeafened(next);
+    wsRef.current?.send(JSON.stringify({ type: 'deafen-state', deafened: next }));
+    // Deafening also mutes you (like Discord)
+    if (next && !isMuted) {
+      const muted = voiceRef.current?.toggleMute() ?? false;
+      setIsMuted(muted);
+      wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted: true }));
+    }
+    // Undeafening does NOT auto-unmute — user must unmute manually
+  }, [isDeafened, isMuted]);
 
   const toggleCamera = useCallback(async () => {
     if (isCameraOn) {
@@ -200,6 +262,34 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       await voiceRef.current?.startScreenShare();
     }
   }, [isScreenSharing]);
+
+  const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+
+  const saveVoicePeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
+    fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
+      method: 'PUT',
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ peerUsername, volume, muted }),
+    });
+  }, [serverIP, accessToken, protocol]);
+
+  const handleUserVolume = useCallback((user: string, volume: number) => {
+    voiceRef.current?.setUserVolume(user, volume);
+    setVoicePeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, volume };
+      saveVoicePeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveVoicePeerSetting]);
+
+  const handleUserMute = useCallback((user: string, muted: boolean) => {
+    voiceRef.current?.setUserMuted(user, muted);
+    setVoicePeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, muted };
+      saveVoicePeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveVoicePeerSetting]);
 
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
@@ -224,6 +314,12 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           onSelectTextChannel={setSelectedTextChannelId}
           onScreenAudioVolume={(user, vol) => voiceRef.current?.setScreenAudioVolume(user, vol)}
           onScreenAudioMute={(user, muted) => voiceRef.current?.setScreenAudioMuted(user, muted)}
+          localUsername={username}
+          selfMutedUsers={selfMutedUsers}
+          deafenedUsers={deafenedUsers}
+          voicePeerSettings={voicePeerSettings}
+          onUserVolume={handleUserVolume}
+          onUserMute={handleUserMute}
           onJoinVoiceChannel={joinVoiceChannel}
           onFocusVideo={(user) => {
             setFocusedVideoUsers((prev) => {
@@ -238,9 +334,11 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           <VoiceControls
             channelName={currentVoiceChannel.name}
             isMuted={isMuted}
+            isDeafened={isDeafened}
             isCameraOn={isCameraOn}
             isScreenSharing={isScreenSharing}
             onToggleMute={toggleMute}
+            onToggleDeafen={toggleDeafen}
             onToggleCamera={toggleCamera}
             onToggleScreenShare={toggleScreenShare}
             onDisconnect={leaveVoiceChannel}

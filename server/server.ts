@@ -21,10 +21,16 @@ const port = process.env.PORT || 3000;
 
 const db = new Database();
 
+type VoicePeerSetting = {
+  volume: number;
+  muted: boolean;
+};
+
 type User = {
   username: string;
   password: string;
   profilePhoto: string | null;
+  voicePeerSettings: Record<string, VoicePeerSetting> | null;
   $id: string;
 };
 const Users = db.createCollection<User>("users");
@@ -98,6 +104,7 @@ app.post("/signup", async (req: Request, res: Response) => {
     username: req.body.username,
     password: password,
     profilePhoto: null,
+    voicePeerSettings: null,
   };
   Users.create(user);
 
@@ -149,6 +156,29 @@ app.put("/me/profile-photo", upload.single('file'), (req: Request, res: Response
   const url = `/uploads/${file.filename}`;
   Users.update((u) => { u.profilePhoto = url; }, (u) => u.username === username);
   return res.status(200).json({ profilePhoto: url });
+});
+
+// Voice peer settings endpoints
+app.get("/me/voice-peer-settings", (req: Request, res: Response) => {
+  const accessToken = req.headers["access-token"];
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (!username) return res.sendStatus(401);
+  const user = Users.get((u) => u.username === username);
+  return res.status(200).json({ voicePeerSettings: user?.voicePeerSettings || {} });
+});
+
+app.put("/me/voice-peer-settings", (req: Request, res: Response) => {
+  const accessToken = req.headers["access-token"] as string;
+  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+  if (!username) return res.sendStatus(401);
+  const { peerUsername, volume, muted } = req.body;
+  if (!peerUsername) return res.sendStatus(400);
+  const user = Users.get((u) => u.username === username);
+  if (!user) return res.sendStatus(404);
+  const settings = (user as any).voicePeerSettings || {};
+  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
+  Users.update((u) => { (u as any).voicePeerSettings = settings; }, (u) => u.username === username);
+  return res.status(200).json({ voicePeerSettings: settings });
 });
 
 // Channel endpoints
@@ -211,6 +241,8 @@ app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
 type ConnectedClient = {
   username: string;
   voiceChannelId: string | null;
+  isMuted: boolean;
+  isDeafened: boolean;
 };
 const clients = new Map<WebSocket, ConnectedClient>();
 
@@ -224,6 +256,28 @@ function getVoicePeers(): Record<string, string[]> {
     }
   }
   return peers;
+}
+
+// Get self-muted usernames across all voice channels
+function getMutedUsers(): string[] {
+  const muted: string[] = [];
+  for (const client of clients.values()) {
+    if (client.voiceChannelId && client.isMuted) {
+      muted.push(client.username);
+    }
+  }
+  return muted;
+}
+
+// Get self-deafened usernames across all voice channels
+function getDeafenedUsers(): string[] {
+  const deafened: string[] = [];
+  for (const client of clients.values()) {
+    if (client.voiceChannelId && client.isDeafened) {
+      deafened.push(client.username);
+    }
+  }
+  return deafened;
 }
 
 // Get unique online usernames
@@ -320,10 +374,10 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       clientPings.set(ws, Date.now() - (ws as any).pingSentAt);
     }
   });
-  clients.set(ws, { username, voiceChannelId: null });
+  clients.set(ws, { username, voiceChannelId: null, isMuted: false, isDeafened: false });
 
   // Send current voice state on connect
-  ws.send(JSON.stringify({ type: 'voice-state', voicePeers: getVoicePeers() }));
+  ws.send(JSON.stringify({ type: 'voice-state', voicePeers: getVoicePeers(), mutedUsers: getMutedUsers(), deafenedUsers: getDeafenedUsers() }));
 
   // Notify all clients of updated online users
   broadcastPresence();
@@ -396,6 +450,26 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({ type: 'delete-message', messageId: msg.messageId }));
         }
+      }
+      return;
+    }
+
+    // ── Mute state ──
+    if (msg.type === 'mute-state') {
+      const client = clients.get(ws);
+      if (client) {
+        client.isMuted = msg.muted;
+        broadcastToAll({ type: 'mute-state', username, muted: msg.muted });
+      }
+      return;
+    }
+
+    // ── Deafen state ──
+    if (msg.type === 'deafen-state') {
+      const client = clients.get(ws);
+      if (client) {
+        client.isDeafened = msg.deafened;
+        broadcastToAll({ type: 'deafen-state', username, deafened: msg.deafened });
       }
       return;
     }

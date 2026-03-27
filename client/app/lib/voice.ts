@@ -48,6 +48,7 @@ export class VoiceClient {
   private screenStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
   private audioElements = new Map<string, HTMLAudioElement>();
+  private userAudioElements = new Map<string, HTMLAudioElement>(); // username -> mic audio element
   private videoProducerIds = new Set<string>(); // producer IDs that are camera video
   private screenProducerIds = new Set<string>(); // producer IDs that are screen share video
   private screenAudioProducerIds = new Set<string>(); // producer IDs that are screen share audio
@@ -219,6 +220,7 @@ export class VoiceClient {
     audio.srcObject = new MediaStream([consumer.track]);
     audio.play();
     this.audioElements.set(producerId, audio);
+    if (remoteUsername) this.userAudioElements.set(remoteUsername, audio);
 
     // Monitor remote audio levels
     if (remoteUsername && this.audioContext) {
@@ -259,6 +261,7 @@ export class VoiceClient {
         this.audioElements.delete(producerId);
       }
       if (username) {
+        this.userAudioElements.delete(username);
         this.analysers.delete(username);
         this.speakingState.delete(username);
         this.handlers.onSpeakingChange(username, false);
@@ -456,6 +459,7 @@ export class VoiceClient {
     this.consumers.clear();
     this.audioElements.forEach((a) => { a.srcObject = null; });
     this.audioElements.clear();
+    this.userAudioElements.clear();
     this.audioProducer = null;
     this.videoProducer = null;
     this.screenProducer = null;
@@ -484,6 +488,25 @@ export class VoiceClient {
   setScreenAudioMuted(username: string, muted: boolean) {
     const audio = this.screenAudioElements.get(username);
     if (audio) audio.muted = muted;
+  }
+
+  setUserVolume(username: string, volume: number) {
+    const audio = this.userAudioElements.get(username);
+    if (audio) audio.volume = Math.max(0, Math.min(1, volume));
+  }
+
+  setUserMuted(username: string, muted: boolean) {
+    const audio = this.userAudioElements.get(username);
+    if (audio) audio.muted = muted;
+  }
+
+  setDeafened(deafened: boolean) {
+    for (const audio of this.audioElements.values()) {
+      audio.muted = deafened;
+    }
+    for (const audio of this.screenAudioElements.values()) {
+      audio.muted = deafened;
+    }
   }
 
   destroy() {

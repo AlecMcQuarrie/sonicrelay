@@ -1,19 +1,21 @@
 import { Button } from "~/components/ui/button";
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff, Headphones, HeadphoneOff } from "lucide-react";
 
 interface VoiceControlsProps {
   channelName: string;
   isMuted: boolean;
+  isDeafened: boolean;
   isCameraOn: boolean;
   isScreenSharing: boolean;
   onToggleMute: () => void;
+  onToggleDeafen: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
   onDisconnect: () => void;
 }
 
 export default function VoiceControls({
-  channelName, isMuted, isCameraOn, isScreenSharing, onToggleMute, onToggleCamera, onToggleScreenShare, onDisconnect,
+  channelName, isMuted, isDeafened, isCameraOn, isScreenSharing, onToggleMute, onToggleDeafen, onToggleCamera, onToggleScreenShare, onDisconnect,
 }: VoiceControlsProps) {
   return (
     <div className="border-t p-3">
@@ -23,6 +25,9 @@ export default function VoiceControls({
       <div className="flex gap-2">
         <Button variant="ghost" size="sm" onClick={onToggleMute}>
           {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onToggleDeafen}>
+          {isDeafened ? <HeadphoneOff className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleCamera}>
           {isCameraOn ? <Video className="w-4 h-4 text-red-500" /> : <VideoOff className="w-4 h-4" />}
