@@ -227,8 +227,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   return (
     <div className="flex h-screen">
       <div className="w-60 border-r flex flex-col h-screen">
-        <div className="p-4 border-b font-bold">
-          ripv2
+        <div className="px-4 py-1 border-b font-bold text-center">
+          <span className="text-[32px]">[</span>
+          <span className="relative -top-[2px] px-1 text-2xl">RIPCORD V2</span>
+          <span className="text-[32px]">]</span>
         </div>
         <ChannelSidebar
           channels={channels}
