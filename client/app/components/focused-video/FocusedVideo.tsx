@@ -50,7 +50,7 @@ export default function FocusedVideo({ videoTracks, onRemove, onCloseAll }: Focu
   const columns = count <= 1 ? 1 : 2;
 
   return (
-    <div className="absolute inset-0 z-10 bg-background/95 flex flex-col">
+    <div className="absolute top-1 left-0 right-0 bottom-0 z-10 bg-background/95 flex flex-col">
       <div className="flex items-center justify-between p-3 border-b">
         <span className="text-sm font-medium">
           {count} {count === 1 ? "feed" : "feeds"}
