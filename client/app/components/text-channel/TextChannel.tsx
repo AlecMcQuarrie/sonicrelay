@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Paperclip, X, FileIcon, Trash2, SendHorizontal } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
+import MessageContent from "./MessageContent";
 import Avatar from "~/components/ui/avatar";
 
 type Message = {
@@ -145,7 +146,14 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
               <span className="text-xs text-muted-foreground">
                 {new Date(msg.timestamp).toLocaleTimeString()}
               </span>
-              {msg.messageContent && <p className="whitespace-pre-wrap break-words">{msg.messageContent}</p>}
+              {msg.messageContent && (
+                <MessageContent
+                  text={msg.messageContent}
+                  serverIP={serverIP}
+                  accessToken={accessToken}
+                  onLoad={scrollToBottom}
+                />
+              )}
               {msg.attachments && msg.attachments.length > 0 && (
                 <MessageAttachments attachments={msg.attachments} serverIP={serverIP} onLoad={scrollToBottom} />
               )}
@@ -209,6 +217,13 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                 el.style.height = "auto";
                 const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 20;
                 el.style.height = Math.min(el.scrollHeight, lineHeight * 6) + "px";
+              }
+            }}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (files.length > 0) {
+                e.preventDefault();
+                setPendingFiles((prev) => [...prev, ...files]);
               }
             }}
             onKeyDown={(e) => {
