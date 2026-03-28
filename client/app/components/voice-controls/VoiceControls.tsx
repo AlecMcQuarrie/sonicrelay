@@ -27,7 +27,7 @@ export default function VoiceControls({
           {isMuted ? <MicOff className="w-4 h-4 text-red-500" /> : <Mic className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleDeafen}>
-          {isDeafened ? <HeadphoneOff className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}
+          {isDeafened ? <HeadphoneOff className="w-4 h-4 text-red-500" /> : <Headphones className="w-4 h-4" />}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggleCamera}>
           {isCameraOn ? <Video className="w-4 h-4 text-red-500" /> : <VideoOff className="w-4 h-4" />}
