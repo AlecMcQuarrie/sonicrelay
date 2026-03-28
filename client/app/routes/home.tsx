@@ -16,7 +16,7 @@ export function meta({ }: Route.MetaArgs) {
 export default function Home() {
   // Variables
   const [connectionData, setConnectionData] = useState<any>(null); // Temporary "any" type, do not use any
-  const [isNewSession, setIsNewSession] = useState(true);
+  const [isNewSession, setIsNewSession] = useState<boolean | null>(null);
 
   // Initial load, only runs once
   // Checks for previous connection data in the browser's local storage
@@ -28,6 +28,8 @@ export default function Home() {
       const parsedData = JSON.parse(data);
       setConnectionData(parsedData);
       setIsNewSession(false);
+    } else {
+      setIsNewSession(true);
     }
   }, []);
 
@@ -57,7 +59,9 @@ export default function Home() {
     setIsNewSession(false);
   }, [setConnectionData, connectionData]);
 
-  if (isNewSession) {
+  if (isNewSession === null) {
+    return null;
+  } else if (isNewSession) {
     return <ServerJoin submitForm={joinServer}></ServerJoin>;
   } else {
     return (
