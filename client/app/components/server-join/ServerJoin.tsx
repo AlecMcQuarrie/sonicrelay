@@ -38,7 +38,7 @@ export default function ServerJoin({ submitForm }: ServerJoinProps) {
         <strong>
           <span>
             <span style={{ fontSize: "32px" }}>[</span>
-            <span style={{ padding: "0 4px", position: "relative", top: "-2px" }}>RIPCORD V2</span>
+            <span style={{ padding: "0 4px", position: "relative", top: "-2px" }}>SONICRELAY</span>
             <span style={{ fontSize: "32px" }}>]</span>
           </span>
         </strong>
