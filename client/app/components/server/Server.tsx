@@ -319,7 +319,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       <div className="w-60 border-r flex flex-col h-screen">
         <div className="px-4 py-1 border-b font-bold text-center">
           <span className="text-[32px]">[</span>
-          <span className="relative -top-[2px] px-1 text-2xl">RIPCORD V2</span>
+          <span className="relative -top-[2px] px-1 text-2xl">SONICRELAY</span>
           <span className="text-[32px]">]</span>
         </div>
         <ChannelSidebar

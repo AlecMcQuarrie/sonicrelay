@@ -5,7 +5,7 @@ import Server from "~/components/server/Server";
 
 export function meta({ }: Route.MetaArgs) {
   return [
-    { title: "RipV2" },
+    { title: "SonicRelay.io" },
     {
       name: "description",
       content: "Highly secure, robust, discord alternative.",
