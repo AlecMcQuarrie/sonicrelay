@@ -35,6 +35,7 @@ interface ChannelSidebarProps {
   selfMutedUsers: Set<string>;
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
+  screenAudioPeerSettings: Record<string, VoicePeerSetting>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
   onFocusVideo: (key: string) => void;
@@ -51,15 +52,17 @@ function pingColor(ms: number): string {
 }
 
 
-function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, peerPings, hasScreenAudio, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
+function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, screenAudioPeerSettings, peerPings, hasScreenAudio, isScreenSharing, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
   user: string;
   isSelf?: boolean;
   speakingUsers: Set<string>;
   selfMutedUsers: Set<string>;
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
+  screenAudioPeerSettings: Record<string, VoicePeerSetting>;
   peerPings: Record<string, number>;
   hasScreenAudio: boolean;
+  isScreenSharing: boolean;
   onUserVolume: (username: string, volume: number) => void;
   onUserMute: (username: string, muted: boolean) => void;
   onScreenAudioVolume: (username: string, volume: number) => void;
@@ -80,7 +83,7 @@ function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, v
           <span
             className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"}`}
           />
-          <span className="flex-1 truncate">{user}</span>
+          <span className={`flex-1 truncate ${isScreenSharing ? "text-red-500" : ""}`}>{user}</span>
           {selfMutedUsers.has(user) && (
             <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
           )}
@@ -110,6 +113,7 @@ function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, v
             <div className="mx-2 my-1 border-t" />
             <ScreenAudioControls
               username={user}
+              setting={screenAudioPeerSettings[user] || { volume: 1, muted: false }}
               disabled={isSelf}
               onVolume={onScreenAudioVolume}
               onMute={onScreenAudioMute}
@@ -162,6 +166,7 @@ export default function ChannelSidebar({
   selfMutedUsers,
   deafenedUsers,
   voicePeerSettings,
+  screenAudioPeerSettings,
   onUserVolume,
   onUserMute,
 }: ChannelSidebarProps) {
@@ -210,8 +215,10 @@ export default function ChannelSidebar({
                   selfMutedUsers={selfMutedUsers}
                   deafenedUsers={deafenedUsers}
                   voicePeerSettings={voicePeerSettings}
+                  screenAudioPeerSettings={screenAudioPeerSettings}
                   peerPings={peerPings}
                   hasScreenAudio={screenAudioUsers.has(user)}
+                  isScreenSharing={screenTracks.has(user)}
                   onUserVolume={onUserVolume}
                   onUserMute={onUserMute}
                   onScreenAudioVolume={onScreenAudioVolume}

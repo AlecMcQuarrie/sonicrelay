@@ -1,16 +1,22 @@
 import { useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 
+type VoicePeerSetting = {
+  volume: number;
+  muted: boolean;
+};
+
 interface ScreenAudioControlsProps {
   username: string;
+  setting: VoicePeerSetting;
   disabled?: boolean;
   onVolume: (username: string, volume: number) => void;
   onMute: (username: string, muted: boolean) => void;
 }
 
-export default function ScreenAudioControls({ username, disabled, onVolume, onMute }: ScreenAudioControlsProps) {
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(1);
+export default function ScreenAudioControls({ username, setting, disabled, onVolume, onMute }: ScreenAudioControlsProps) {
+  const [muted, setMuted] = useState(setting.muted);
+  const [volume, setVolume] = useState(setting.volume);
 
   return (
     <div className="p-2 space-y-2 min-w-[160px]" onClick={(e) => e.stopPropagation()}>

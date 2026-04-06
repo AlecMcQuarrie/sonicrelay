@@ -42,12 +42,15 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [deafenedUsers, setDeafenedUsers] = useState<Set<string>>(new Set());
   const [isDeafened, setIsDeafened] = useState(false);
   const [voicePeerSettings, setVoicePeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
+  const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
   voicePeerSettingsRef.current = voicePeerSettings;
+  const screenAudioPeerSettingsRef = useRef(screenAudioPeerSettings);
+  screenAudioPeerSettingsRef.current = screenAudioPeerSettings;
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
@@ -92,6 +95,12 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     })
       .then((res) => res.json())
       .then((data) => setVoicePeerSettings(data.voicePeerSettings || {}));
+
+    fetch(`${protocol}://${serverIP}/me/screen-audio-peer-settings`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setScreenAudioPeerSettings(data.screenAudioPeerSettings || {}));
 
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
@@ -170,6 +179,15 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           else next.delete(user);
           return next;
         });
+        if (available) {
+          setTimeout(() => {
+            const s = screenAudioPeerSettingsRef.current[user];
+            if (s) {
+              voiceRef.current?.setScreenAudioVolume(user, s.volume);
+              voiceRef.current?.setScreenAudioMuted(user, s.muted);
+            }
+          }, 500);
+        }
       },
     });
 
@@ -342,6 +360,32 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     });
   }, [saveVoicePeerSetting]);
 
+  const saveScreenAudioPeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
+    fetch(`${protocol}://${serverIP}/me/screen-audio-peer-settings`, {
+      method: 'PUT',
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ peerUsername, volume, muted }),
+    });
+  }, [serverIP, accessToken, protocol]);
+
+  const handleScreenAudioVolume = useCallback((user: string, volume: number) => {
+    voiceRef.current?.setScreenAudioVolume(user, volume);
+    setScreenAudioPeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, volume };
+      saveScreenAudioPeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveScreenAudioPeerSetting]);
+
+  const handleScreenAudioMute = useCallback((user: string, muted: boolean) => {
+    voiceRef.current?.setScreenAudioMuted(user, muted);
+    setScreenAudioPeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, muted };
+      saveScreenAudioPeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveScreenAudioPeerSetting]);
+
   const banUser = useCallback((target: string) => {
     fetch(`${protocol}://${serverIP}/users/${target}/ban`, {
       method: 'POST',
@@ -380,8 +424,9 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           screenAudioUsers={screenAudioUsers}
           focusedFeeds={focusedVideoUsers}
           onSelectTextChannel={setSelectedTextChannelId}
-          onScreenAudioVolume={(user, vol) => voiceRef.current?.setScreenAudioVolume(user, vol)}
-          onScreenAudioMute={(user, muted) => voiceRef.current?.setScreenAudioMuted(user, muted)}
+          screenAudioPeerSettings={screenAudioPeerSettings}
+          onScreenAudioVolume={handleScreenAudioVolume}
+          onScreenAudioMute={handleScreenAudioMute}
           localUsername={username}
           selfMutedUsers={selfMutedUsers}
           deafenedUsers={deafenedUsers}

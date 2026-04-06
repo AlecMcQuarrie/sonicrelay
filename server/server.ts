@@ -33,6 +33,7 @@ type User = {
   password: string;
   profilePhoto: string | null;
   voicePeerSettings: Record<string, VoicePeerSetting> | null;
+  screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
   role: Role;
   banned: boolean;
   $id: string;
@@ -126,6 +127,7 @@ app.post("/signup", async (req: Request, res: Response) => {
     password: password,
     profilePhoto: null,
     voicePeerSettings: null,
+    screenAudioPeerSettings: null,
     role: 'member' as Role,
     banned: false,
   };
@@ -201,6 +203,27 @@ app.put("/me/voice-peer-settings", (req: Request, res: Response) => {
   settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
   Users.update((u) => { (u as any).voicePeerSettings = settings; }, (u) => u.username === auth.username);
   return res.status(200).json({ voicePeerSettings: settings });
+});
+
+// Screen audio peer settings endpoints
+app.get("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const user = Users.get((u) => u.username === auth.username);
+  return res.status(200).json({ screenAudioPeerSettings: user?.screenAudioPeerSettings || {} });
+});
+
+app.put("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const { peerUsername, volume, muted } = req.body;
+  if (!peerUsername) return res.sendStatus(400);
+  const user = Users.get((u) => u.username === auth.username);
+  if (!user) return res.sendStatus(404);
+  const settings = (user as any).screenAudioPeerSettings || {};
+  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
+  Users.update((u) => { (u as any).screenAudioPeerSettings = settings; }, (u) => u.username === auth.username);
+  return res.status(200).json({ screenAudioPeerSettings: settings });
 });
 
 // Channel endpoints
