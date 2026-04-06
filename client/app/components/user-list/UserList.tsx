@@ -48,10 +48,6 @@ export default function UserList({
         {sorted.map((user) => {
           const online = onlineUsers.has(user);
           const targetRole = userRoles[user] || 'member';
-          const canAct = user !== myUsername
-            && myRole !== 'member'
-            && targetRole !== 'superadmin'
-            && (myRole === 'superadmin' || targetRole === 'member');
           return (
             <UserRow
               key={user}
@@ -60,7 +56,7 @@ export default function UserList({
               photoUrl={photoUrl(user)}
               targetRole={targetRole}
               myRole={myRole}
-              canAct={canAct}
+              isSelf={user === myUsername}
               onPromote={() => onSetRole(user, 'admin')}
               onDemote={() => onSetRole(user, 'member')}
               onBanClick={() => setBanTarget(user)}

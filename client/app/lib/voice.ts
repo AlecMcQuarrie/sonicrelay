@@ -87,9 +87,11 @@ export class VoiceClient {
           break;
         case 'peer-joined':
           this.handlers.onPeerJoined(msg.channelId, msg.username);
+          new Audio('/sounds/ping.mp3').play().catch(() => {});
           break;
         case 'peer-left':
           this.handlers.onPeerLeft(msg.channelId, msg.username);
+          new Audio('/sounds/ping.mp3').play().catch(() => {});
           break;
       }
     };
