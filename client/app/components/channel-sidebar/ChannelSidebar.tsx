@@ -51,8 +51,9 @@ function pingColor(ms: number): string {
 }
 
 
-function PeerRow({ user, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, peerPings, hasScreenAudio, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
+function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, peerPings, hasScreenAudio, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
   user: string;
+  isSelf?: boolean;
   speakingUsers: Set<string>;
   selfMutedUsers: Set<string>;
   deafenedUsers: Set<string>;
@@ -100,6 +101,7 @@ function PeerRow({ user, speakingUsers, selfMutedUsers, deafenedUsers, voicePeer
         <PeerVolumeMenu
           username={user}
           setting={voicePeerSettings[user] || { volume: 1, muted: false }}
+          disabled={isSelf}
           onVolume={onUserVolume}
           onMute={onUserMute}
         />
@@ -108,6 +110,7 @@ function PeerRow({ user, speakingUsers, selfMutedUsers, deafenedUsers, voicePeer
             <div className="mx-2 my-1 border-t" />
             <ScreenAudioControls
               username={user}
+              disabled={isSelf}
               onVolume={onScreenAudioVolume}
               onMute={onScreenAudioMute}
             />
@@ -200,39 +203,20 @@ export default function ChannelSidebar({
             </Button>
             {voicePeers[channel.__id]?.sort().map((user) => (
               <div key={user}>
-                {user !== localUsername ? (
-                  <PeerRow
-                    user={user}
-                    speakingUsers={speakingUsers}
-                    selfMutedUsers={selfMutedUsers}
-                    deafenedUsers={deafenedUsers}
-                    voicePeerSettings={voicePeerSettings}
-                    peerPings={peerPings}
-                    hasScreenAudio={screenAudioUsers.has(user)}
-                    onUserVolume={onUserVolume}
-                    onUserMute={onUserMute}
-                    onScreenAudioVolume={onScreenAudioVolume}
-                    onScreenAudioMute={onScreenAudioMute}
-                  />
-                ) : (
-                  <div className="py-1 text-sm text-muted-foreground flex items-center gap-2">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"}`}
-                    />
-                    <span className="flex-1 truncate">{user}</span>
-                    {selfMutedUsers.has(user) && (
-                      <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
-                    )}
-                    {deafenedUsers.has(user) && (
-                      <HeadphoneOff className="w-3 h-3 text-muted-foreground shrink-0" />
-                    )}
-                    {peerPings[user] !== undefined && (
-                      <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
-                        {peerPings[user]}ms
-                      </span>
-                    )}
-                  </div>
-                )}
+                <PeerRow
+                  user={user}
+                  isSelf={user === localUsername}
+                  speakingUsers={speakingUsers}
+                  selfMutedUsers={selfMutedUsers}
+                  deafenedUsers={deafenedUsers}
+                  voicePeerSettings={voicePeerSettings}
+                  peerPings={peerPings}
+                  hasScreenAudio={screenAudioUsers.has(user)}
+                  onUserVolume={onUserVolume}
+                  onUserMute={onUserMute}
+                  onScreenAudioVolume={onScreenAudioVolume}
+                  onScreenAudioMute={onScreenAudioMute}
+                />
                 {videoTracks.has(user) && !focusedFeeds.has(`camera:${user}`) && (
                   <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(`camera:${user}`)} />
                 )}

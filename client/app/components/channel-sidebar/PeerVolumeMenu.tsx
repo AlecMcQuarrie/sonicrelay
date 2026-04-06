@@ -9,11 +9,12 @@ type VoicePeerSetting = {
 interface PeerVolumeMenuProps {
   username: string;
   setting: VoicePeerSetting;
+  disabled?: boolean;
   onVolume: (username: string, volume: number) => void;
   onMute: (username: string, muted: boolean) => void;
 }
 
-export default function PeerVolumeMenu({ username, setting, onVolume, onMute }: PeerVolumeMenuProps) {
+export default function PeerVolumeMenu({ username, setting, disabled, onVolume, onMute }: PeerVolumeMenuProps) {
   const [volume, setVolume] = useState(setting.volume);
   const [muted, setMuted] = useState(setting.muted);
 
@@ -22,7 +23,8 @@ export default function PeerVolumeMenu({ username, setting, onVolume, onMute }: 
       <div className="text-xs font-medium truncate">{username}</div>
       <div className="flex items-center gap-2">
         <button
-          className="shrink-0 p-0.5 rounded hover:bg-muted"
+          className="shrink-0 p-0.5 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
+          disabled={disabled}
           onClick={() => {
             const next = !muted;
             setMuted(next);
@@ -39,7 +41,8 @@ export default function PeerVolumeMenu({ username, setting, onVolume, onMute }: 
           max="1"
           step="0.05"
           value={volume}
-          className="w-full h-1 accent-foreground"
+          disabled={disabled}
+          className="w-full h-1 accent-foreground disabled:opacity-50"
           onChange={(e) => {
             const v = parseFloat(e.target.value);
             setVolume(v);
