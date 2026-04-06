@@ -13,6 +13,8 @@ type Channel = {
   __id: string; // simpl.db serializes $id as __id in JSON
 };
 
+type Role = 'superadmin' | 'admin' | 'member';
+
 interface ServerProps {
   serverIP: string;
   accessToken: string;
@@ -40,6 +42,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [deafenedUsers, setDeafenedUsers] = useState<Set<string>>(new Set());
   const [isDeafened, setIsDeafened] = useState(false);
   const [voicePeerSettings, setVoicePeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
+  const [myRole, setMyRole] = useState<Role>('member');
+  const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
@@ -67,11 +71,21 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       .then((data) => {
         setAllUsers(data.users.map((u: { username: string }) => u.username));
         const photos: Record<string, string | null> = {};
-        data.users.forEach((u: { username: string; profilePhoto: string | null }) => {
+        const roles: Record<string, Role> = {};
+        data.users.forEach((u: { username: string; profilePhoto: string | null; role: Role }) => {
           photos[u.username] = u.profilePhoto;
+          roles[u.username] = u.role || 'member';
         });
         setProfilePhotos(photos);
+        setUserRoles(roles);
       });
+
+    fetch(`${protocol}://${serverIP}/me`, {
+      method: 'POST',
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setMyRole((data.role as Role) || 'member'));
 
     fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
       headers: { "access-token": accessToken },
@@ -209,6 +223,23 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       if (msg.type === 'voice-pings') {
         setPeerPings(msg.pings);
       }
+      if (msg.type === 'role-changed') {
+        setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
+        if (msg.username === username) setMyRole(msg.role);
+      }
+      if (msg.type === 'user-banned') {
+        setAllUsers((prev) => prev.filter((u) => u !== msg.username));
+        setOnlineUsers((prev) => {
+          const next = new Set(prev);
+          next.delete(msg.username);
+          return next;
+        });
+        setUserRoles((prev) => {
+          const next = { ...prev };
+          delete next[msg.username];
+          return next;
+        });
+      }
     };
     ws.addEventListener('message', handleServerMessages);
 
@@ -311,6 +342,21 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     });
   }, [saveVoicePeerSetting]);
 
+  const banUser = useCallback((target: string) => {
+    fetch(`${protocol}://${serverIP}/users/${target}/ban`, {
+      method: 'POST',
+      headers: { "access-token": accessToken },
+    });
+  }, [protocol, serverIP, accessToken]);
+
+  const setUserRole = useCallback((target: string, role: Role) => {
+    fetch(`${protocol}://${serverIP}/users/${target}/role`, {
+      method: 'PUT',
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+  }, [protocol, serverIP, accessToken]);
+
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
@@ -384,6 +430,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             username={username}
             wsRef={wsRef}
             profilePhotos={profilePhotos}
+            myRole={myRole}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -415,7 +462,17 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         })()}
       </div>
       <div className="w-52 border-l h-screen">
-        <UserList users={allUsers} onlineUsers={onlineUsers} profilePhotos={profilePhotos} serverIP={serverIP} />
+        <UserList
+          users={allUsers}
+          onlineUsers={onlineUsers}
+          profilePhotos={profilePhotos}
+          serverIP={serverIP}
+          myUsername={username}
+          myRole={myRole}
+          userRoles={userRoles}
+          onBan={banUser}
+          onSetRole={setUserRole}
+        />
       </div>
     </div>
   );

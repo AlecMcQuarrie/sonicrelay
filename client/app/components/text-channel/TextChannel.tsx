@@ -21,9 +21,10 @@ interface TextChannelProps {
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
   profilePhotos: Record<string, string | null>;
+  myRole: 'superadmin' | 'admin' | 'member';
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos }: TextChannelProps) {
+export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos, myRole }: TextChannelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -158,7 +159,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                 <MessageAttachments attachments={msg.attachments} serverIP={serverIP} onLoad={scrollToBottom} />
               )}
             </div>
-            {msg.sender === username && msg.__id && (
+            {(msg.sender === username || myRole !== 'member') && msg.__id && (
               <button
                 onClick={() => deleteMessage(msg.__id!)}
                 className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1 cursor-pointer"

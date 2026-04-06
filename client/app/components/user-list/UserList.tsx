@@ -1,15 +1,29 @@
+import { useState } from "react";
 import { Users } from "lucide-react";
-import Avatar from "~/components/ui/avatar";
+import UserRow from "./UserRow";
+import BanDialog from "./BanDialog";
+
+type Role = 'superadmin' | 'admin' | 'member';
 
 interface UserListProps {
   users: string[];
   onlineUsers: Set<string>;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
+  myUsername: string;
+  myRole: Role;
+  userRoles: Record<string, Role>;
+  onBan: (username: string) => void;
+  onSetRole: (username: string, role: Role) => void;
 }
 
-export default function UserList({ users, onlineUsers, profilePhotos, serverIP }: UserListProps) {
+export default function UserList({
+  users, onlineUsers, profilePhotos, serverIP,
+  myUsername, myRole, userRoles, onBan, onSetRole,
+}: UserListProps) {
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+  const [banTarget, setBanTarget] = useState<string | null>(null);
+
   const sorted = [...users].sort((a, b) => {
     const aOnline = onlineUsers.has(a);
     const bOnline = onlineUsers.has(b);
@@ -33,24 +47,33 @@ export default function UserList({ users, onlineUsers, profilePhotos, serverIP }
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         {sorted.map((user) => {
           const online = onlineUsers.has(user);
+          const targetRole = userRoles[user] || 'member';
+          const canAct = user !== myUsername
+            && myRole !== 'member'
+            && targetRole !== 'superadmin'
+            && (myRole === 'superadmin' || targetRole === 'member');
           return (
-            <div
+            <UserRow
               key={user}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-sm ${
-                online ? "text-foreground" : "text-muted-foreground/50"
-              }`}
-            >
-              <Avatar username={user} profilePhoto={photoUrl(user)} size="sm" />
-              <span className="flex-1 truncate">{user}</span>
-              <span
-                className={`inline-block w-2 h-2 rounded-full shrink-0 ${
-                  online ? "bg-green-500" : "bg-muted-foreground/30"
-                }`}
-              />
-            </div>
+              user={user}
+              online={online}
+              photoUrl={photoUrl(user)}
+              targetRole={targetRole}
+              myRole={myRole}
+              canAct={canAct}
+              onPromote={() => onSetRole(user, 'admin')}
+              onDemote={() => onSetRole(user, 'member')}
+              onBanClick={() => setBanTarget(user)}
+            />
           );
         })}
       </div>
+
+      <BanDialog
+        username={banTarget}
+        onClose={() => setBanTarget(null)}
+        onConfirm={onBan}
+      />
     </div>
   );
 }

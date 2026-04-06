@@ -26,14 +26,35 @@ type VoicePeerSetting = {
   muted: boolean;
 };
 
+type Role = 'superadmin' | 'admin' | 'member';
+
 type User = {
   username: string;
   password: string;
   profilePhoto: string | null;
   voicePeerSettings: Record<string, VoicePeerSetting> | null;
+  role: Role;
+  banned: boolean;
   $id: string;
 };
 const Users = db.createCollection<User>("users");
+
+// Look up caller's identity and role from access-token header.
+// Role and banned status are read fresh from the DB on every request
+// so promotions/demotions/bans take effect without re-issuing tokens.
+function authenticate(req: Request): { username: string; role: Role } | null {
+  const token = req.headers["access-token"] as string | undefined;
+  if (!token) return null;
+  try {
+    const { username } = jwt.verify(token, process.env.ENCRYPTION_KEY);
+    if (!username) return null;
+    const user = Users.get((u) => u.username === username);
+    if (!user || user.banned) return null;
+    return { username, role: user.role || 'member' };
+  } catch {
+    return null;
+  }
+}
 
 type Channel = {
   name: string;
@@ -105,6 +126,8 @@ app.post("/signup", async (req: Request, res: Response) => {
     password: password,
     profilePhoto: null,
     voicePeerSettings: null,
+    role: 'member' as Role,
+    banned: false,
   };
   Users.create(user);
 
@@ -126,6 +149,7 @@ app.post("/login", async (req: Request, res: Response) => {
   const compare = await bcrypt.compare(req.body.password, user.password);
 
   if (compare) {
+    if (user.banned) return res.sendStatus(403);
     const token = jwt.sign(
       { username: user.username },
       process.env.ENCRYPTION_KEY,
@@ -138,85 +162,118 @@ app.post("/login", async (req: Request, res: Response) => {
 });
 
 app.post("/me", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (username) {
-    const user = Users.get((u) => u.username === username);
-    return res.status(200).json({ username, profilePhoto: user?.profilePhoto || null });
-  }
-  return res.sendStatus(401);
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const user = Users.get((u) => u.username === auth.username);
+  return res.status(200).json({
+    username: auth.username,
+    profilePhoto: user?.profilePhoto || null,
+    role: auth.role,
+  });
 });
 
 app.put("/me/profile-photo", upload.single('file'), (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"] as string;
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (!username) return res.sendStatus(401);
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
   const file = req.file as Express.Multer.File;
   if (!file) return res.sendStatus(400);
   const url = `/uploads/${file.filename}`;
-  Users.update((u) => { u.profilePhoto = url; }, (u) => u.username === username);
+  Users.update((u) => { u.profilePhoto = url; }, (u) => u.username === auth.username);
   return res.status(200).json({ profilePhoto: url });
 });
 
 // Voice peer settings endpoints
 app.get("/me/voice-peer-settings", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (!username) return res.sendStatus(401);
-  const user = Users.get((u) => u.username === username);
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const user = Users.get((u) => u.username === auth.username);
   return res.status(200).json({ voicePeerSettings: user?.voicePeerSettings || {} });
 });
 
 app.put("/me/voice-peer-settings", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"] as string;
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (!username) return res.sendStatus(401);
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
   const { peerUsername, volume, muted } = req.body;
   if (!peerUsername) return res.sendStatus(400);
-  const user = Users.get((u) => u.username === username);
+  const user = Users.get((u) => u.username === auth.username);
   if (!user) return res.sendStatus(404);
   const settings = (user as any).voicePeerSettings || {};
   settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
-  Users.update((u) => { (u as any).voicePeerSettings = settings; }, (u) => u.username === username);
+  Users.update((u) => { (u as any).voicePeerSettings = settings; }, (u) => u.username === auth.username);
   return res.status(200).json({ voicePeerSettings: settings });
 });
 
 // Channel endpoints
 app.get("/channels", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (username) {
-    return res.status(200).json({ channels: Channels.getAll() });
-  }
-  return res.sendStatus(401);
+  if (!authenticate(req)) return res.sendStatus(401);
+  return res.status(200).json({ channels: Channels.getAll() });
 });
 
 app.post("/channels", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (username) {
-    const channel = Channels.create({ name: req.body.name, type: req.body.type || "text" });
-    return res.status(200).json({ channel });
-  }
-  return res.sendStatus(401);
+  if (!authenticate(req)) return res.sendStatus(401);
+  const channel = Channels.create({ name: req.body.name, type: req.body.type || "text" });
+  return res.status(200).json({ channel });
 });
 
-// Users endpoint
+// Users endpoint — excludes banned users from the list
 app.get("/users", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (username) {
-    const users = Users.getAll().map((u) => ({ username: u.username, profilePhoto: u.profilePhoto || null }));
-    return res.status(200).json({ users });
+  if (!authenticate(req)) return res.sendStatus(401);
+  const users = Users.getAll()
+    .filter((u) => !u.banned)
+    .map((u) => ({
+      username: u.username,
+      profilePhoto: u.profilePhoto || null,
+      role: (u.role || 'member') as Role,
+    }));
+  return res.status(200).json({ users });
+});
+
+// Admin/superadmin: promote or demote a user
+app.put("/users/:username/role", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  if (auth.role === 'member') return res.sendStatus(403);
+  const role = req.body.role as Role;
+  if (role !== 'admin' && role !== 'member') return res.sendStatus(400); // can't assign superadmin via API
+  const target = Users.get((u) => u.username === req.params.username);
+  if (!target) return res.sendStatus(404);
+  const targetRole = target.role || 'member';
+  // Nobody can modify a superadmin
+  if (targetRole === 'superadmin') return res.sendStatus(403);
+  // Prevent self-demotion (lockout guard)
+  if (target.username === auth.username) return res.sendStatus(400);
+  // Regular admins can only promote members, not demote other admins
+  if (auth.role === 'admin' && targetRole === 'admin') return res.sendStatus(403);
+  Users.update((u) => { u.role = role; }, (u) => u.username === req.params.username);
+  broadcastToAll({ type: 'role-changed', username: req.params.username, role });
+  return res.sendStatus(200);
+});
+
+// Admin/superadmin: ban a user (soft delete). Closes their WS and blocks future login.
+app.post("/users/:username/ban", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  if (auth.role === 'member') return res.sendStatus(403);
+  const target = Users.get((u) => u.username === req.params.username);
+  if (!target) return res.sendStatus(404);
+  const targetRole = target.role || 'member';
+  // Nobody can ban a superadmin
+  if (targetRole === 'superadmin') return res.sendStatus(403);
+  // Regular admins can't ban other admins — only superadmins can
+  if (auth.role === 'admin' && targetRole === 'admin') return res.sendStatus(403);
+  if (target.username === auth.username) return res.sendStatus(400);
+  Users.update((u) => { u.banned = true; }, (u) => u.username === req.params.username);
+  // Close any active connections for the banned user
+  for (const [ws, client] of clients) {
+    if (client.username === target.username) ws.close(4003, 'banned');
   }
-  return res.sendStatus(401);
+  broadcastToAll({ type: 'user-banned', username: target.username });
+  return res.sendStatus(200);
 });
 
 // Upload endpoint
 app.post("/upload", upload.array('files', 10), (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"] as string;
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (!username) return res.sendStatus(401);
+  if (!authenticate(req)) return res.sendStatus(401);
   const files = req.files as Express.Multer.File[];
   const urls = files.map((f) => `/uploads/${f.filename}`);
   return res.status(200).json({ urls });
@@ -224,9 +281,7 @@ app.post("/upload", upload.array('files', 10), (req: Request, res: Response) => 
 
 // Link preview endpoint — fetches Open Graph metadata from a URL
 app.get("/link-preview", async (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"] as string;
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (!username) return res.sendStatus(401);
+  if (!authenticate(req)) return res.sendStatus(401);
 
   const url = req.query.url as string;
   if (!url) return res.sendStatus(400);
@@ -269,15 +324,11 @@ app.get("/link-preview", async (req: Request, res: Response) => {
 
 // Message endpoint
 app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
-  const accessToken = req.headers["access-token"];
-  const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-  if (username) {
-    const messages = Messages.getAll().filter(
-      (m) => m.channelId === req.params.channelId,
-    );
-    return res.status(200).json({ messages });
-  }
-  return res.sendStatus(401);
+  if (!authenticate(req)) return res.sendStatus(401);
+  const messages = Messages.getAll().filter(
+    (m) => m.channelId === req.params.channelId,
+  );
+  return res.status(200).json({ messages });
 });
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
@@ -364,6 +415,11 @@ const wss = new WebSocketServer({
     const accessToken = info.req.headers["access-token"] || url.searchParams.get("token");
     const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
     if (username) {
+      const user = Users.get((u) => u.username === username);
+      if (!user || user.banned) {
+        authenticate(false, 403);
+        return;
+      }
       info.req.username = username;
       authenticate(true);
       return;
@@ -484,7 +540,9 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     // ── Delete message ──
     if (msg.type === 'delete-message') {
       const message = Messages.get((m: any) => m.__id === msg.messageId);
-      if (!message || message.sender !== username) return;
+      const actor = Users.get((u) => u.username === username);
+      const isAdmin = actor?.role === 'admin' || actor?.role === 'superadmin';
+      if (!message || (message.sender !== username && !isAdmin)) return;
       // Delete attachment files from disk
       for (const url of message.attachments || []) {
         const filePath = path.join(__dirname, url);
