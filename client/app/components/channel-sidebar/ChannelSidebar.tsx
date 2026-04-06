@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Hash, Volume2, VolumeX, Mic, MicOff, HeadphoneOff } from "lucide-react";
+import { Hash, Volume2, MicOff, HeadphoneOff } from "lucide-react";
+import PeerVolumeMenu from "./PeerVolumeMenu";
+import ScreenAudioControls from "./ScreenAudioControls";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "~/components/ui/context-menu";
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+} from "~/components/ui/dropdown-menu";
 
 type Channel = {
   name: string;
@@ -48,88 +50,71 @@ function pingColor(ms: number): string {
   return "text-red-500";
 }
 
-function ScreenAudioControls({ username, onVolume, onMute }: {
-  username: string;
-  onVolume: (username: string, volume: number) => void;
-  onMute: (username: string, muted: boolean) => void;
+
+function PeerRow({ user, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, peerPings, hasScreenAudio, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
+  user: string;
+  speakingUsers: Set<string>;
+  selfMutedUsers: Set<string>;
+  deafenedUsers: Set<string>;
+  voicePeerSettings: Record<string, VoicePeerSetting>;
+  peerPings: Record<string, number>;
+  hasScreenAudio: boolean;
+  onUserVolume: (username: string, volume: number) => void;
+  onUserMute: (username: string, muted: boolean) => void;
+  onScreenAudioVolume: (username: string, volume: number) => void;
+  onScreenAudioMute: (username: string, muted: boolean) => void;
 }) {
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(1);
+  const [open, setOpen] = useState(false);
 
   return (
-    <div className="p-2 space-y-2 min-w-[160px]" onClick={(e) => e.stopPropagation()}>
-      <div className="text-xs font-medium">Screen Audio</div>
-      <div className="flex items-center gap-2">
-        <button
-          className="shrink-0 p-0.5 rounded hover:bg-muted"
-          onClick={() => {
-            const next = !muted;
-            setMuted(next);
-            onMute(username, next);
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <div
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setOpen(true);
           }}
+          className="py-1 text-sm text-muted-foreground flex items-center gap-2 cursor-pointer select-none hover:bg-accent rounded-md px-1"
         >
-          {muted
-            ? <VolumeX className="w-3.5 h-3.5 text-red-500" />
-            : <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />}
-        </button>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={volume}
-          className="w-full h-1 accent-foreground"
-          onChange={(e) => {
-            const v = parseFloat(e.target.value);
-            setVolume(v);
-            onVolume(username, v);
-          }}
+          <span
+            className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"}`}
+          />
+          <span className="flex-1 truncate">{user}</span>
+          {selfMutedUsers.has(user) && (
+            <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
+          )}
+          {deafenedUsers.has(user) && (
+            <HeadphoneOff className="w-3 h-3 text-muted-foreground shrink-0" />
+          )}
+          {voicePeerSettings[user]?.muted && (
+            <MicOff className="w-3 h-3 text-red-500 shrink-0" />
+          )}
+          {peerPings[user] !== undefined && (
+            <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
+              {peerPings[user]}ms
+            </span>
+          )}
+        </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <PeerVolumeMenu
+          username={user}
+          setting={voicePeerSettings[user] || { volume: 1, muted: false }}
+          onVolume={onUserVolume}
+          onMute={onUserMute}
         />
-      </div>
-    </div>
-  );
-}
-
-function PeerVolumeMenu({ username, setting, onVolume, onMute }: {
-  username: string;
-  setting: VoicePeerSetting;
-  onVolume: (username: string, volume: number) => void;
-  onMute: (username: string, muted: boolean) => void;
-}) {
-  const [volume, setVolume] = useState(setting.volume);
-  const [muted, setMuted] = useState(setting.muted);
-
-  return (
-    <div className="p-2 space-y-2 min-w-[160px]" onClick={(e) => e.stopPropagation()}>
-      <div className="text-xs font-medium truncate">{username}</div>
-      <div className="flex items-center gap-2">
-        <button
-          className="shrink-0 p-0.5 rounded hover:bg-muted"
-          onClick={() => {
-            const next = !muted;
-            setMuted(next);
-            onMute(username, next);
-          }}
-        >
-          {muted
-            ? <MicOff className="w-3.5 h-3.5 text-red-500" />
-            : <Mic className="w-3.5 h-3.5 text-muted-foreground" />}
-        </button>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={volume}
-          className="w-full h-1 accent-foreground"
-          onChange={(e) => {
-            const v = parseFloat(e.target.value);
-            setVolume(v);
-            onVolume(username, v);
-          }}
-        />
-      </div>
-    </div>
+        {hasScreenAudio && (
+          <>
+            <div className="mx-2 my-1 border-t" />
+            <ScreenAudioControls
+              username={user}
+              onVolume={onScreenAudioVolume}
+              onMute={onScreenAudioMute}
+            />
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -216,38 +201,19 @@ export default function ChannelSidebar({
             {voicePeers[channel.__id]?.sort().map((user) => (
               <div key={user}>
                 {user !== localUsername ? (
-                  <ContextMenu>
-                    <ContextMenuTrigger asChild>
-                      <div className="py-1 text-sm text-muted-foreground flex items-center gap-2 cursor-default">
-                        <span
-                          className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"}`}
-                        />
-                        <span className="flex-1 truncate">{user}</span>
-                        {selfMutedUsers.has(user) && (
-                          <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
-                        )}
-                        {deafenedUsers.has(user) && (
-                          <HeadphoneOff className="w-3 h-3 text-muted-foreground shrink-0" />
-                        )}
-                        {voicePeerSettings[user]?.muted && (
-                          <MicOff className="w-3 h-3 text-red-500 shrink-0" />
-                        )}
-                        {peerPings[user] !== undefined && (
-                          <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
-                            {peerPings[user]}ms
-                          </span>
-                        )}
-                      </div>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <PeerVolumeMenu
-                        username={user}
-                        setting={voicePeerSettings[user] || { volume: 1, muted: false }}
-                        onVolume={onUserVolume}
-                        onMute={onUserMute}
-                      />
-                    </ContextMenuContent>
-                  </ContextMenu>
+                  <PeerRow
+                    user={user}
+                    speakingUsers={speakingUsers}
+                    selfMutedUsers={selfMutedUsers}
+                    deafenedUsers={deafenedUsers}
+                    voicePeerSettings={voicePeerSettings}
+                    peerPings={peerPings}
+                    hasScreenAudio={screenAudioUsers.has(user)}
+                    onUserVolume={onUserVolume}
+                    onUserMute={onUserMute}
+                    onScreenAudioVolume={onScreenAudioVolume}
+                    onScreenAudioMute={onScreenAudioMute}
+                  />
                 ) : (
                   <div className="py-1 text-sm text-muted-foreground flex items-center gap-2">
                     <span
@@ -271,20 +237,7 @@ export default function ChannelSidebar({
                   <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(`camera:${user}`)} />
                 )}
                 {screenTracks.has(user) && !focusedFeeds.has(`screen:${user}`) && (
-                  screenAudioUsers.has(user) ? (
-                    <ContextMenu>
-                      <ContextMenuTrigger asChild>
-                        <div>
-                          <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
-                        </div>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent>
-                        <ScreenAudioControls username={user} onVolume={onScreenAudioVolume} onMute={onScreenAudioMute} />
-                      </ContextMenuContent>
-                    </ContextMenu>
-                  ) : (
-                    <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
-                  )
+                  <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
                 )}
               </div>
             ))}
