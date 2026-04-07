@@ -314,7 +314,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
       {/* Messages — column-reverse keeps viewport anchored to bottom */}
       {initialLoading ? (
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden flex flex-col justify-end">
           <MessageSkeletons />
         </div>
       ) : (
