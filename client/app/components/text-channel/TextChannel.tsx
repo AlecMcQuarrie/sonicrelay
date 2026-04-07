@@ -365,6 +365,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     setJumpingToMessage(true);
     observerRef.current?.disconnect();
 
+    // Immediately scroll to the top so the user sees motion right away
+    container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
+
     let currentMessages = [...messages];
     let moreAvailable = hasMore;
     let found = false;
