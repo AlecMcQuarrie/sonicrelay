@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown } from "lucide-react";
+import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown, Reply, CornerUpLeft } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
 import MessageSkeletons from "./MessageSkeletons";
 import Avatar from "~/components/ui/avatar";
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "~/components/ui/context-menu";
+import { cn } from "~/lib/utils";
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
 const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
@@ -97,6 +99,7 @@ type Message = {
   sender: string;
   timestamp: string;
   attachments?: string[];
+  replyToId?: string | null;
 };
 
 interface TextChannelProps {
@@ -120,6 +123,10 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [replyCache, setReplyCache] = useState<Map<string, Message | 'deleted'>>(new Map());
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +142,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     setMessages([]);
     setHasMore(false);
     setInitialLoading(true);
+    setReplyingTo(null);
+    setReplyCache(new Map());
     fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
       headers: { "access-token": accessToken },
     })
@@ -282,11 +291,13 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
     wsRef.current.send(JSON.stringify({
       type: 'text-message', channelId, messageContent: input, attachments,
+      replyToId: replyingTo?.__id || null,
     }));
 
     setInput("");
     setPendingFiles([]);
-  }, [input, pendingFiles, username, channelId, wsRef]);
+    setReplyingTo(null);
+  }, [input, pendingFiles, username, channelId, wsRef, replyingTo]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -304,6 +315,109 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const removePendingFile = (index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   };
+
+  const startReply = (msg: Message) => {
+    setReplyingTo(msg);
+    textareaRef.current?.focus();
+  };
+
+  // Fetch reply targets not in messages or cache
+  useEffect(() => {
+    const missingIds = messages
+      .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
+      .map((m) => m.replyToId!);
+    const uniqueIds = [...new Set(missingIds)];
+    if (uniqueIds.length === 0) return;
+
+    for (const id of uniqueIds) {
+      fetch(`${protocol}://${serverIP}/messages/${id}`, {
+        headers: { "access-token": accessToken },
+      }).then((res) => {
+        if (res.status === 404) {
+          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+        } else {
+          return res.json().then((data: Message) => {
+            setReplyCache((prev) => new Map(prev).set(id, data));
+          });
+        }
+      }).catch(() => {});
+    }
+  }, [messages, replyCache, protocol, serverIP, accessToken]);
+
+  const highlightMessage = useCallback((id: string) => {
+    setHighlightedMessageId(id);
+    setTimeout(() => setHighlightedMessageId(null), 2000);
+  }, []);
+
+  const jumpToMessage = useCallback(async (targetId: string) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    // Check if already in DOM
+    const existing = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+    if (existing) {
+      existing.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightMessage(targetId);
+      return;
+    }
+
+    // Need to paginate backwards to find it
+    setJumpingToMessage(true);
+    observerRef.current?.disconnect();
+
+    let currentMessages = [...messages];
+    let moreAvailable = hasMore;
+    let found = false;
+
+    while (moreAvailable && !found) {
+      const oldest = currentMessages[0];
+      if (!oldest?.__id) break;
+
+      const res = await fetch(
+        `${protocol}://${serverIP}/channels/${channelId}/messages?limit=50&before=${oldest.__id}`,
+        { headers: { "access-token": accessToken } }
+      );
+      const data = await res.json();
+
+      const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+
+      flushSync(() => {
+        setOgCache((prev) => {
+          const merged = new Map(prev);
+          newOgEntries.forEach((v, k) => merged.set(k, v));
+          return merged;
+        });
+        setMessages((prev) => [...data.messages, ...prev]);
+        setHasMore(data.hasMore);
+      });
+
+      currentMessages = [...data.messages, ...currentMessages];
+      moreAvailable = data.hasMore;
+
+      if (data.messages.some((m: Message) => m.__id === targetId)) {
+        found = true;
+      }
+    }
+
+    setJumpingToMessage(false);
+
+    // Scroll to target after DOM updates
+    requestAnimationFrame(() => {
+      const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        highlightMessage(targetId);
+      }
+      // Re-enable observer
+      loadingRef.current = false;
+      requestAnimationFrame(() => {
+        const sentinel = sentinelRef.current;
+        if (sentinel && observerRef.current) {
+          observerRef.current.observe(sentinel);
+        }
+      });
+    });
+  }, [messages, hasMore, channelId, accessToken, serverIP, protocol, highlightMessage]);
 
   return (
     <div className="flex flex-col h-full">
@@ -328,41 +442,110 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+
+            // Resolve the reply target
+            const replyTarget = msg.replyToId
+              ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
+              : null;
+
             return (
-            <div key={msg.__id || i} data-msg-id={msg.__id} className="min-w-0 group flex gap-2 items-start">
-              <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <span className="font-bold">{msg.sender}</span>{" "}
-                <span className="text-xs text-muted-foreground">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
-                </span>
-                {msg.messageContent && (
-                  <MessageContent
-                    text={msg.messageContent}
-                    serverIP={serverIP}
-                    accessToken={accessToken}
-                    ogCache={ogCache}
-                  />
-                )}
-                {msg.attachments && msg.attachments.length > 0 && (
-                  <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
-                )}
-              </div>
-              {(msg.sender === username || myRole !== 'member') && msg.__id && (
-                <button
-                  onClick={() => deleteMessage(msg.__id!)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1 cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+            <ContextMenu key={msg.__id || i}>
+              <ContextMenuTrigger asChild>
+                <div data-msg-id={msg.__id} className={cn(
+                  "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700",
+                  highlightedMessageId === msg.__id && "bg-primary/15"
+                )}>
+                  <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    {/* Reply quote */}
+                    {msg.replyToId && (
+                      <div
+                        onClick={() => {
+                          if (replyTarget && replyTarget !== 'deleted') jumpToMessage(msg.replyToId!);
+                        }}
+                        className={cn(
+                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5",
+                          replyTarget && replyTarget !== 'deleted' && "cursor-pointer hover:text-foreground transition-colors"
+                        )}
+                      >
+                        <CornerUpLeft className="w-3 h-3 shrink-0" />
+                        {replyTarget === 'deleted' ? (
+                          <span className="italic">Original message was deleted</span>
+                        ) : replyTarget ? (
+                          <>
+                            <span className="font-semibold">{replyTarget.sender}</span>
+                            <span className="truncate max-w-60">
+                              {replyTarget.messageContent
+                                ? replyTarget.messageContent.length > 60
+                                  ? replyTarget.messageContent.slice(0, 60) + '...'
+                                  : replyTarget.messageContent
+                                : 'Click to see attachment'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="italic">Loading...</span>
+                        )}
+                      </div>
+                    )}
+                    <span className="font-bold">{msg.sender}</span>{" "}
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </span>
+                    {msg.messageContent && (
+                      <MessageContent
+                        text={msg.messageContent}
+                        serverIP={serverIP}
+                        accessToken={accessToken}
+                        ogCache={ogCache}
+                      />
+                    )}
+                    {msg.attachments && msg.attachments.length > 0 && (
+                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                    )}
+                  </div>
+                  <div className="flex gap-0.5 shrink-0 mt-1">
+                    {msg.__id && (
+                      <button
+                        onClick={() => startReply(msg)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground cursor-pointer"
+                      >
+                        <Reply className="w-4 h-4" />
+                      </button>
+                    )}
+                    {(msg.sender === username || myRole !== 'member') && msg.__id && (
+                      <button
+                        onClick={() => deleteMessage(msg.__id!)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem onClick={() => startReply(msg)} className="cursor-pointer">
+                  <Reply className="w-4 h-4 mr-2" />
+                  Reply
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
             );
           })}
         </div>
 
+        {/* Jumping to message overlay */}
+        {jumpingToMessage && (
+          <div className="sticky bottom-2 flex justify-center pointer-events-none">
+            <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-sm shadow-lg">
+              <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              Jumping to message...
+            </div>
+          </div>
+        )}
+
         {/* Jump to bottom button */}
-        {showJumpToBottom && (
+        {showJumpToBottom && !jumpingToMessage && (
           <div className="sticky bottom-2 flex justify-center pointer-events-none">
             <button
               onClick={jumpToBottom}
@@ -397,6 +580,30 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Reply preview bar */}
+      {replyingTo && (
+        <div className="px-4 pt-2 flex items-center gap-2 text-sm">
+          <div className="flex-1 min-w-0 border-l-2 border-primary pl-2 py-1">
+            <div className="text-xs text-muted-foreground">
+              Replying to <span className="font-semibold text-foreground">{replyingTo.sender}</span>
+            </div>
+            <div className="text-muted-foreground truncate text-xs">
+              {replyingTo.messageContent
+                ? replyingTo.messageContent.length > 100
+                  ? replyingTo.messageContent.slice(0, 100) + '...'
+                  : replyingTo.messageContent
+                : 'Attachment'}
+            </div>
+          </div>
+          <button
+            onClick={() => setReplyingTo(null)}
+            className="text-muted-foreground hover:text-foreground transition-colors shrink-0 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

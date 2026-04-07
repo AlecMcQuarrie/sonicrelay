@@ -70,6 +70,7 @@ type Message = {
   sender: string;
   timestamp: string;
   attachments: string[];
+  replyToId: string | null;
   $id: string;
 };
 const Messages = db.createCollection<Message>("messages");
@@ -367,6 +368,14 @@ app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   });
 });
 
+// Single message endpoint (for reply preview lookups)
+app.get("/messages/:messageId", (req: Request, res: Response) => {
+  if (!authenticate(req)) return res.sendStatus(401);
+  const message = Messages.get((m: any) => m.__id === req.params.messageId);
+  if (!message) return res.sendStatus(404);
+  return res.status(200).json(message);
+});
+
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 
 // Track connected clients
@@ -547,12 +556,14 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     if (msg.type === 'text-message') {
       const attachments: string[] = msg.attachments || [];
       const timestamp = new Date().toISOString();
+      const replyToId = msg.replyToId || null;
       const stored = Messages.create({
         channelId: msg.channelId,
         messageContent: msg.messageContent,
         attachments,
         timestamp,
         sender: username,
+        replyToId,
       });
       const message = {
         type: 'text-message',
@@ -562,6 +573,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         attachments,
         timestamp,
         sender: username,
+        replyToId,
       };
       // Echo back to sender so they get the __id
       ws.send(JSON.stringify(message));

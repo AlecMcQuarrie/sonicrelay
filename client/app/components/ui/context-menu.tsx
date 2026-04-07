@@ -38,4 +38,33 @@ function ContextMenuContent({
   )
 }
 
-export { ContextMenu, ContextMenuTrigger, ContextMenuContent }
+function ContextMenuItem({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Item>) {
+  return (
+    <ContextMenuPrimitive.Item
+      data-slot="context-menu-item"
+      className={cn(
+        "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function ContextMenuSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Separator>) {
+  return (
+    <ContextMenuPrimitive.Separator
+      data-slot="context-menu-separator"
+      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      {...props}
+    />
+  )
+}
+
+export { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator }
