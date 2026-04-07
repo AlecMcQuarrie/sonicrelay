@@ -41,9 +41,11 @@ export default function MessageAttachments({ attachments, serverIP }: MessageAtt
 
         if (VIDEO_EXTS.includes(ext)) {
           return (
-            <video key={i} controls className="max-w-sm max-h-72 rounded border">
-              <source src={fullUrl} />
-            </video>
+            <div key={i} className="max-w-sm aspect-video">
+              <video controls className="w-full h-full rounded border object-contain bg-black">
+                <source src={fullUrl} />
+              </video>
+            </div>
           );
         }
 

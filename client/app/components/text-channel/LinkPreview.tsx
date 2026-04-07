@@ -1,27 +1,23 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
-
-type OgData = {
-  title: string | null;
-  description: string | null;
-  image: string | null;
-  siteName: string | null;
-  url: string;
-};
+import type { OgData } from "./TextChannel";
 
 interface LinkPreviewProps {
   url: string;
   serverIP: string;
   accessToken: string;
+  cachedOg?: OgData;
 }
 
-export default function LinkPreview({ url, serverIP, accessToken }: LinkPreviewProps) {
-  const [og, setOg] = useState<OgData | null>(null);
+export default function LinkPreview({ url, serverIP, accessToken, cachedOg }: LinkPreviewProps) {
+  const [og, setOg] = useState<OgData | null>(cachedOg || null);
   const [failed, setFailed] = useState(false);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
+  // Only fetch if not provided via cache
   useEffect(() => {
+    if (cachedOg) return;
     let cancelled = false;
     fetch(`${protocol}://${serverIP}/link-preview?url=${encodeURIComponent(url)}`, {
       headers: { "access-token": accessToken },
@@ -39,7 +35,7 @@ export default function LinkPreview({ url, serverIP, accessToken }: LinkPreviewP
       })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [url]);
+  }, [url, cachedOg]);
 
   if (failed || !og) return null;
 
@@ -59,7 +55,6 @@ export default function LinkPreview({ url, serverIP, accessToken }: LinkPreviewP
             src={`https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`}
             alt={og.title || "YouTube video"}
             className="w-full h-full object-cover"
-
           />
           {/* Play button overlay */}
           <div className="absolute inset-0 flex items-center justify-center">

@@ -2,7 +2,92 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
+import MessageSkeletons from "./MessageSkeletons";
 import Avatar from "~/components/ui/avatar";
+
+const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
+const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
+
+function getExt(url: string): string {
+  return url.substring(url.lastIndexOf('.')).toLowerCase();
+}
+
+export type OgData = {
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  siteName: string | null;
+  url: string;
+};
+
+/** Preload an image URL. Resolves when loaded or errored. */
+function preloadImage(url: string): Promise<void> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => resolve();
+    img.src = url;
+  });
+}
+
+/** Preload all attachment images + link preview OG data (and their images). */
+async function preloadAllMedia(
+  messages: Message[],
+  protocol: string,
+  serverIP: string,
+  accessToken: string,
+): Promise<Map<string, OgData>> {
+  const ogCache = new Map<string, OgData>();
+  const imagePromises: Promise<void>[] = [];
+
+  // Collect attachment image URLs
+  for (const msg of messages) {
+    for (const att of msg.attachments || []) {
+      if (IMAGE_EXTS.includes(getExt(att))) {
+        imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}`));
+      }
+    }
+  }
+
+  // Collect all unique URLs from message text for link previews
+  const allUrls = new Set<string>();
+  for (const msg of messages) {
+    if (!msg.messageContent) continue;
+    const matches = msg.messageContent.match(URL_REGEX);
+    if (matches) matches.forEach((u) => allUrls.add(u));
+  }
+
+  // Fetch OG data for all URLs in parallel
+  const ogPromises = [...allUrls].map(async (url) => {
+    try {
+      const res = await fetch(
+        `${protocol}://${serverIP}/link-preview?url=${encodeURIComponent(url)}`,
+        { headers: { "access-token": accessToken } },
+      );
+      if (!res.ok) return;
+      const data: OgData = await res.json();
+      if (data.title || data.image) {
+        ogCache.set(url, data);
+        // Preload the OG image too
+        if (data.image) {
+          imagePromises.push(preloadImage(data.image));
+        }
+        // Preload YouTube thumbnail if applicable
+        const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+        if (ytMatch) {
+          imagePromises.push(preloadImage(`https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`));
+        }
+      }
+    } catch { /* skip failed previews */ }
+  });
+
+  // Wait for all OG fetches first (they may add images to preload)
+  await Promise.all(ogPromises);
+  // Then wait for all images (attachments + OG images)
+  await Promise.all(imagePromises);
+
+  return ogCache;
+}
 
 type Message = {
   __id?: string;
@@ -32,6 +117,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -40,23 +127,30 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
-  // Fetch initial messages for this channel
+  // Fetch initial messages, preload all media (attachments + link previews), then reveal
   useEffect(() => {
     setMessages([]);
     setHasMore(false);
+    setInitialLoading(true);
     fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
-      .then((data) => {
+      .then(async (data) => {
+        const cache = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+        setOgCache(cache);
         setMessages(data.messages);
         setHasMore(data.hasMore);
+        setInitialLoading(false);
       });
   }, [channelId, accessToken]);
 
-  // Load older messages
+  // Load older messages, preserving scroll position
   const loadOlder = useCallback(async () => {
     if (loadingMore || !hasMore || messages.length === 0) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
     setLoadingMore(true);
     const oldest = messages[0];
     const res = await fetch(
@@ -64,9 +158,23 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       { headers: { "access-token": accessToken } }
     );
     const data = await res.json();
+
+    // Snapshot scroll state before prepending.
+    // In column-reverse, scrollTop is 0 at bottom and negative going up.
+    // scrollHeight will grow after prepend — adjust scrollTop to compensate.
+    const prevScrollHeight = container.scrollHeight;
+    const prevScrollTop = container.scrollTop;
+
     setMessages((prev) => [...data.messages, ...prev]);
     setHasMore(data.hasMore);
     setLoadingMore(false);
+
+    // After React renders, restore scroll position
+    requestAnimationFrame(() => {
+      const newScrollHeight = container.scrollHeight;
+      const addedHeight = newScrollHeight - prevScrollHeight;
+      container.scrollTop = prevScrollTop - addedHeight;
+    });
   }, [loadingMore, hasMore, messages, channelId, accessToken, serverIP, protocol]);
 
   // IntersectionObserver to detect scrolling to the top (oldest messages)
@@ -175,6 +283,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       </div>
 
       {/* Messages — column-reverse keeps viewport anchored to bottom */}
+      {initialLoading ? (
+        <div className="flex-1 overflow-hidden">
+          <MessageSkeletons />
+        </div>
+      ) : (
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col-reverse">
         <div className="space-y-2">
           {/* Sentinel for loading older messages */}
@@ -198,6 +311,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                     text={msg.messageContent}
                     serverIP={serverIP}
                     accessToken={accessToken}
+                    ogCache={ogCache}
                   />
                 )}
                 {msg.attachments && msg.attachments.length > 0 && (
@@ -230,6 +344,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           </div>
         )}
       </div>
+      )}
 
       {/* Pending file previews */}
       {pendingFiles.length > 0 && (

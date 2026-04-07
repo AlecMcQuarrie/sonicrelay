@@ -1,4 +1,5 @@
 import LinkPreview from "./LinkPreview";
+import type { OgData } from "./TextChannel";
 
 const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
 
@@ -6,9 +7,10 @@ interface MessageContentProps {
   text: string;
   serverIP: string;
   accessToken: string;
+  ogCache?: Map<string, OgData>;
 }
 
-export default function MessageContent({ text, serverIP, accessToken }: MessageContentProps) {
+export default function MessageContent({ text, serverIP, accessToken, ogCache }: MessageContentProps) {
   // Find all URLs in the message
   const urls: string[] = [];
   const parts: (string | { url: string; key: number })[] = [];
@@ -60,6 +62,7 @@ export default function MessageContent({ text, serverIP, accessToken }: MessageC
           url={url}
           serverIP={serverIP}
           accessToken={accessToken}
+          cachedOg={ogCache?.get(url)}
         />
       ))}
     </div>
