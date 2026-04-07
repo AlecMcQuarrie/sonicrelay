@@ -124,7 +124,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [initialLoading, setInitialLoading] = useState(true);
   const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [replyCache, setReplyCache] = useState<Map<string, Message>>(new Map());
+  const [replyCache, setReplyCache] = useState<Map<string, Message | 'deleted'>>(new Map());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
@@ -328,10 +328,13 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       fetch(`${protocol}://${serverIP}/messages/${id}`, {
         headers: { "access-token": accessToken },
       }).then((res) => {
-        if (!res.ok) return;
-        return res.json().then((data: Message) => {
-          setReplyCache((prev) => new Map(prev).set(id, data));
-        });
+        if (res.status === 404) {
+          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+        } else if (res.ok) {
+          return res.json().then((data: Message) => {
+            setReplyCache((prev) => new Map(prev).set(id, data));
+          });
+        }
       }).catch(() => {});
     }
   }, [messages, replyCache, protocol, serverIP, accessToken]);
@@ -483,11 +486,20 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                     {/* Reply quote */}
                     {msg.replyToId && (
                       <div
-                        onClick={() => jumpToMessage(msg.replyToId!)}
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5 cursor-pointer hover:text-foreground transition-colors"
+                        onClick={() => {
+                          if (replyTarget && replyTarget !== 'deleted') jumpToMessage(msg.replyToId!);
+                        }}
+                        className={cn(
+                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5",
+                          replyTarget && replyTarget !== 'deleted'
+                            ? "cursor-pointer hover:text-foreground transition-colors"
+                            : "cursor-default"
+                        )}
                       >
                         <CornerUpLeft className="w-3 h-3 shrink-0" />
-                        {replyTarget ? (
+                        {replyTarget === 'deleted' ? (
+                          <span className="italic">Original message was deleted</span>
+                        ) : replyTarget ? (
                           <>
                             <span className="font-semibold">{replyTarget.sender}</span>
                             <span className="truncate max-w-60">
