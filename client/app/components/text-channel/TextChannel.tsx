@@ -145,7 +145,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       });
   }, [channelId, accessToken]);
 
-  // Load older messages, preserving scroll position
+  // Load older messages — preload all media, then reveal
   const loadOlder = useCallback(async () => {
     if (loadingMore || !hasMore || messages.length === 0) return;
     const container = scrollContainerRef.current;
@@ -159,12 +159,19 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     );
     const data = await res.json();
 
-    // Snapshot scroll state before prepending.
-    // In column-reverse, scrollTop is 0 at bottom and negative going up.
-    // scrollHeight will grow after prepend — adjust scrollTop to compensate.
+    // Preload all media in the older page before inserting
+    const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+
+    // Snapshot scroll state before prepending
     const prevScrollHeight = container.scrollHeight;
     const prevScrollTop = container.scrollTop;
 
+    // Merge new OG data into cache
+    setOgCache((prev) => {
+      const merged = new Map(prev);
+      newOgEntries.forEach((v, k) => merged.set(k, v));
+      return merged;
+    });
     setMessages((prev) => [...data.messages, ...prev]);
     setHasMore(data.hasMore);
     setLoadingMore(false);
