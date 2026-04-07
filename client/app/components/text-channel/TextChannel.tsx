@@ -124,7 +124,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [initialLoading, setInitialLoading] = useState(true);
   const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [replyCache, setReplyCache] = useState<Map<string, Message | 'deleted'>>(new Map());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
@@ -143,7 +142,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     setHasMore(false);
     setInitialLoading(true);
     setReplyingTo(null);
-    setReplyCache(new Map());
     fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
       headers: { "access-token": accessToken },
     })
@@ -321,28 +319,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     textareaRef.current?.focus();
   };
 
-  // Fetch reply targets not in messages or cache
-  useEffect(() => {
-    const missingIds = messages
-      .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
-      .map((m) => m.replyToId!);
-    const uniqueIds = [...new Set(missingIds)];
-    if (uniqueIds.length === 0) return;
-
-    for (const id of uniqueIds) {
-      fetch(`${protocol}://${serverIP}/messages/${id}`, {
-        headers: { "access-token": accessToken },
-      }).then((res) => {
-        if (res.status === 404) {
-          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
-        } else {
-          return res.json().then((data: Message) => {
-            setReplyCache((prev) => new Map(prev).set(id, data));
-          });
-        }
-      }).catch(() => {});
-    }
-  }, [messages, replyCache, protocol, serverIP, accessToken]);
 
   const highlightMessage = useCallback((id: string) => {
     setHighlightedMessageId(id);
@@ -404,11 +380,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       // Scroll up progressively after each page loads
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => {
-          if (found) {
-            // Final page — scroll directly to the target
-            const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
+          if (!found) {
             // Intermediate page — scroll to the top of loaded messages
             container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
           }
@@ -418,7 +390,24 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     }
 
     setJumpingToMessage(false);
-    if (found) highlightMessage(targetId);
+
+    // Final scroll — use double-rAF to ensure DOM is fully laid out, then manually
+    // compute scroll position to avoid scrollIntoView quirks with column-reverse
+    if (found) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+          if (el) {
+            const containerRect = container.getBoundingClientRect();
+            const elRect = el.getBoundingClientRect();
+            const offset = elRect.top - containerRect.top - (containerRect.height / 2) + (elRect.height / 2);
+            container.scrollTop += offset;
+          }
+          resolve();
+        }));
+      });
+      highlightMessage(targetId);
+    }
 
     // Re-enable observer
     loadingRef.current = false;
@@ -454,9 +443,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
 
-            // Resolve the reply target
+            // Resolve the reply target from locally loaded messages only
             const replyTarget = msg.replyToId
-              ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
+              ? messages.find((m) => m.__id === msg.replyToId) || null
               : null;
 
             return (
@@ -471,18 +460,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                     {/* Reply quote */}
                     {msg.replyToId && (
                       <div
-                        onClick={() => {
-                          if (replyTarget && replyTarget !== 'deleted') jumpToMessage(msg.replyToId!);
-                        }}
-                        className={cn(
-                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5",
-                          replyTarget && replyTarget !== 'deleted' && "cursor-pointer hover:text-foreground transition-colors"
-                        )}
+                        onClick={() => jumpToMessage(msg.replyToId!)}
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5 cursor-pointer hover:text-foreground transition-colors"
                       >
                         <CornerUpLeft className="w-3 h-3 shrink-0" />
-                        {replyTarget === 'deleted' ? (
-                          <span className="italic">Original message was deleted</span>
-                        ) : replyTarget ? (
+                        {replyTarget ? (
                           <>
                             <span className="font-semibold">{replyTarget.sender}</span>
                             <span className="truncate max-w-60">
@@ -494,7 +476,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                             </span>
                           </>
                         ) : (
-                          <span className="italic">Loading...</span>
+                          <span className="italic">Click to see original message</span>
                         )}
                       </div>
                     )}
