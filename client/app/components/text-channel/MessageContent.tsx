@@ -6,10 +6,9 @@ interface MessageContentProps {
   text: string;
   serverIP: string;
   accessToken: string;
-  onLoad?: () => void;
 }
 
-export default function MessageContent({ text, serverIP, accessToken, onLoad }: MessageContentProps) {
+export default function MessageContent({ text, serverIP, accessToken }: MessageContentProps) {
   // Find all URLs in the message
   const urls: string[] = [];
   const parts: (string | { url: string; key: number })[] = [];
@@ -61,7 +60,6 @@ export default function MessageContent({ text, serverIP, accessToken, onLoad }: 
           url={url}
           serverIP={serverIP}
           accessToken={accessToken}
-          onLoad={onLoad}
         />
       ))}
     </div>

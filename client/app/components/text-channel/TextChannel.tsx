@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Paperclip, X, FileIcon, Trash2, SendHorizontal } from "lucide-react";
+import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
 import Avatar from "~/components/ui/avatar";
@@ -29,37 +29,77 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
-  const isInitialLoad = useRef(true);
-
-  const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: isInitialLoad.current ? "instant" : "smooth" });
-  }, []);
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  // Fetch messages for this channel
+  // Fetch initial messages for this channel
   useEffect(() => {
     setMessages([]);
-    isInitialLoad.current = true;
-    fetch(`${protocol}://${serverIP}/channels/${channelId}/messages`, {
+    setHasMore(false);
+    fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
       .then((data) => {
         setMessages(data.messages);
-        // Allow a frame for render, then mark initial load done
-        requestAnimationFrame(() => { isInitialLoad.current = false; });
+        setHasMore(data.hasMore);
       });
   }, [channelId, accessToken]);
+
+  // Load older messages
+  const loadOlder = useCallback(async () => {
+    if (loadingMore || !hasMore || messages.length === 0) return;
+    setLoadingMore(true);
+    const oldest = messages[0];
+    const res = await fetch(
+      `${protocol}://${serverIP}/channels/${channelId}/messages?limit=50&before=${oldest.__id}`,
+      { headers: { "access-token": accessToken } }
+    );
+    const data = await res.json();
+    setMessages((prev) => [...data.messages, ...prev]);
+    setHasMore(data.hasMore);
+    setLoadingMore(false);
+  }, [loadingMore, hasMore, messages, channelId, accessToken, serverIP, protocol]);
+
+  // IntersectionObserver to detect scrolling to the top (oldest messages)
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadOlder(); },
+      { root: scrollContainerRef.current, threshold: 0 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadOlder]);
+
+  // Track scroll position to show/hide "jump to bottom" button
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const onScroll = () => {
+      // In a column-reverse container, scrollTop is 0 at the bottom and negative as you scroll up
+      setShowJumpToBottom(container.scrollTop < -100);
+    };
+
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const jumpToBottom = () => {
+    const container = scrollContainerRef.current;
+    if (container) container.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // Listen for incoming websocket messages for this channel
   useEffect(() => {
@@ -134,43 +174,61 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         # {channelName}
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2">
-        {messages.map((msg, i) => {
-          const photo = profilePhotos[msg.sender];
-          const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
-          return (
-          <div key={msg.__id || i} className="min-w-0 group flex gap-2 items-start">
-            <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <span className="font-bold">{msg.sender}</span>{" "}
-              <span className="text-xs text-muted-foreground">
-                {new Date(msg.timestamp).toLocaleTimeString()}
-              </span>
-              {msg.messageContent && (
-                <MessageContent
-                  text={msg.messageContent}
-                  serverIP={serverIP}
-                  accessToken={accessToken}
-                  onLoad={scrollToBottom}
-                />
-              )}
-              {msg.attachments && msg.attachments.length > 0 && (
-                <MessageAttachments attachments={msg.attachments} serverIP={serverIP} onLoad={scrollToBottom} />
+      {/* Messages — column-reverse keeps viewport anchored to bottom */}
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col-reverse">
+        <div className="space-y-2">
+          {/* Sentinel for loading older messages */}
+          {hasMore && <div ref={sentinelRef} className="h-1" />}
+          {loadingMore && (
+            <div className="text-center text-sm text-muted-foreground py-2">Loading older messages...</div>
+          )}
+          {messages.map((msg, i) => {
+            const photo = profilePhotos[msg.sender];
+            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            return (
+            <div key={msg.__id || i} className="min-w-0 group flex gap-2 items-start">
+              <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <span className="font-bold">{msg.sender}</span>{" "}
+                <span className="text-xs text-muted-foreground">
+                  {new Date(msg.timestamp).toLocaleTimeString()}
+                </span>
+                {msg.messageContent && (
+                  <MessageContent
+                    text={msg.messageContent}
+                    serverIP={serverIP}
+                    accessToken={accessToken}
+                  />
+                )}
+                {msg.attachments && msg.attachments.length > 0 && (
+                  <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                )}
+              </div>
+              {(msg.sender === username || myRole !== 'member') && msg.__id && (
+                <button
+                  onClick={() => deleteMessage(msg.__id!)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               )}
             </div>
-            {(msg.sender === username || myRole !== 'member') && msg.__id && (
-              <button
-                onClick={() => deleteMessage(msg.__id!)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-1 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
+            );
+          })}
+        </div>
+
+        {/* Jump to bottom button */}
+        {showJumpToBottom && (
+          <div className="sticky bottom-2 flex justify-center pointer-events-none">
+            <button
+              onClick={jumpToBottom}
+              className="pointer-events-auto flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-sm shadow-lg hover:bg-primary/90 transition-colors"
+            >
+              <ArrowDown className="w-4 h-4" />
+              Jump to bottom
+            </button>
           </div>
-          );
-        })}
-        <div ref={bottomRef} />
+        )}
       </div>
 
       {/* Pending file previews */}

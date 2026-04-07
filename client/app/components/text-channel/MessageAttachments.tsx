@@ -4,7 +4,6 @@ import AudioPlayer from "./AudioPlayer";
 interface MessageAttachmentsProps {
   attachments: string[];
   serverIP: string;
-  onLoad?: () => void;
 }
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
@@ -19,7 +18,7 @@ function getFilename(url: string): string {
   return url.substring(url.lastIndexOf('/') + 1);
 }
 
-export default function MessageAttachments({ attachments, serverIP, onLoad }: MessageAttachmentsProps) {
+export default function MessageAttachments({ attachments, serverIP }: MessageAttachmentsProps) {
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
   return (
@@ -34,7 +33,6 @@ export default function MessageAttachments({ attachments, serverIP, onLoad }: Me
               <img
                 src={fullUrl}
                 alt="attachment"
-                onLoad={onLoad}
                 className="max-w-xs max-h-60 rounded border object-contain cursor-pointer hover:opacity-90 transition-opacity"
               />
             </a>

@@ -13,10 +13,9 @@ interface LinkPreviewProps {
   url: string;
   serverIP: string;
   accessToken: string;
-  onLoad?: () => void;
 }
 
-export default function LinkPreview({ url, serverIP, accessToken, onLoad }: LinkPreviewProps) {
+export default function LinkPreview({ url, serverIP, accessToken }: LinkPreviewProps) {
   const [og, setOg] = useState<OgData | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -60,7 +59,7 @@ export default function LinkPreview({ url, serverIP, accessToken, onLoad }: Link
             src={`https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`}
             alt={og.title || "YouTube video"}
             className="w-full h-full object-cover"
-            onLoad={onLoad}
+
           />
           {/* Play button overlay */}
           <div className="absolute inset-0 flex items-center justify-center">
@@ -74,7 +73,6 @@ export default function LinkPreview({ url, serverIP, accessToken, onLoad }: Link
           src={og.image}
           alt={og.title || "Link preview"}
           className="w-full max-h-48 object-cover"
-          onLoad={onLoad}
         />
       ) : null}
       <div className="p-3">

@@ -345,13 +345,26 @@ app.get("/link-preview", async (req: Request, res: Response) => {
   }
 });
 
-// Message endpoint
+// Message endpoint (paginated, cursor-based)
 app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   if (!authenticate(req)) return res.sendStatus(401);
-  const messages = Messages.getAll().filter(
-    (m) => m.channelId === req.params.channelId,
-  );
-  return res.status(200).json({ messages });
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+  const before = req.query.before as string | undefined;
+
+  let all = Messages.getAll()
+    .filter((m: any) => m.channelId === req.params.channelId)
+    .sort((a: any, b: any) => (b as any).timestamp.localeCompare((a as any).timestamp)); // newest first
+
+  if (before) {
+    const idx = all.findIndex((m: any) => (m as any).__id === before);
+    if (idx !== -1) all = all.slice(idx + 1);
+  }
+
+  const page = all.slice(0, limit);
+  return res.status(200).json({
+    messages: page.reverse(), // return oldest→newest for display
+    hasMore: all.length > limit,
+  });
 });
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
