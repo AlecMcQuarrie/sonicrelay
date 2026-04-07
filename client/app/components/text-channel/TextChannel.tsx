@@ -123,6 +123,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loadingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -148,11 +150,17 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   // Load older messages — preload all media, then reveal
   const loadOlder = useCallback(async () => {
-    if (loadingMore || !hasMore || messages.length === 0) return;
+    // Use ref guard to prevent cascading — state updates are async and the observer can fire again
+    if (loadingRef.current || !hasMore || messages.length === 0) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
+    loadingRef.current = true;
     setLoadingMore(true);
+
+    // Disconnect observer while we're loading to prevent cascade
+    observerRef.current?.disconnect();
+
     const oldest = messages[0];
     const res = await fetch(
       `${protocol}://${serverIP}/channels/${channelId}/messages?limit=50&before=${oldest.__id}`,
@@ -163,9 +171,12 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     // Preload all media in the older page before inserting
     const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
 
-    // Snapshot scroll state, flush all updates synchronously, then restore
-    const prevScrollHeight = container.scrollHeight;
-    const prevScrollTop = container.scrollTop;
+    // Find the DOM element of the first currently-visible message to anchor to
+    const firstMsgId = messages[0].__id;
+    const anchorEl = firstMsgId
+      ? container.querySelector(`[data-msg-id="${firstMsgId}"]`) as HTMLElement | null
+      : null;
+    const anchorOffsetBefore = anchorEl ? anchorEl.getBoundingClientRect().top : null;
 
     flushSync(() => {
       setOgCache((prev) => {
@@ -178,10 +189,22 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       setLoadingMore(false);
     });
 
-    // DOM is now updated — restore scroll position immediately
-    const addedHeight = container.scrollHeight - prevScrollHeight;
-    container.scrollTop = prevScrollTop - addedHeight;
-  }, [loadingMore, hasMore, messages, channelId, accessToken, serverIP, protocol]);
+    // DOM is updated — scroll so the anchor element stays in the same visual position
+    if (anchorEl && anchorOffsetBefore !== null) {
+      const anchorOffsetAfter = anchorEl.getBoundingClientRect().top;
+      const drift = anchorOffsetAfter - anchorOffsetBefore;
+      container.scrollTop += drift;
+    }
+
+    // Re-enable observer after a short delay so it doesn't immediately fire
+    loadingRef.current = false;
+    requestAnimationFrame(() => {
+      const sentinel = sentinelRef.current;
+      if (sentinel && observerRef.current) {
+        observerRef.current.observe(sentinel);
+      }
+    });
+  }, [hasMore, messages, channelId, accessToken, serverIP, protocol]);
 
   // IntersectionObserver to detect scrolling to the top (oldest messages)
   useEffect(() => {
@@ -189,9 +212,10 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     if (!sentinel) return;
 
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadOlder(); },
+      ([entry]) => { if (entry.isIntersecting && !loadingRef.current) loadOlder(); },
       { root: scrollContainerRef.current, threshold: 0 }
     );
+    observerRef.current = observer;
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [loadOlder]);
@@ -305,7 +329,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
             return (
-            <div key={msg.__id || i} className="min-w-0 group flex gap-2 items-start">
+            <div key={msg.__id || i} data-msg-id={msg.__id} className="min-w-0 group flex gap-2 items-start">
               <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
               <div className="flex-1 min-w-0">
                 <span className="font-bold">{msg.sender}</span>{" "}
