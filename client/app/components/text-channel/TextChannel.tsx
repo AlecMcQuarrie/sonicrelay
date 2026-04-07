@@ -361,7 +361,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       return;
     }
 
-    // Need to paginate backwards to find it
+    // Need to paginate backwards — scroll progressively with each page
     setJumpingToMessage(true);
     observerRef.current?.disconnect();
 
@@ -397,25 +397,33 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       if (data.messages.some((m: Message) => m.__id === targetId)) {
         found = true;
       }
+
+      // Scroll up progressively after each page loads
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          if (found) {
+            // Final page — scroll directly to the target
+            const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            // Intermediate page — scroll to the top of loaded messages
+            container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
+          }
+          resolve();
+        });
+      });
     }
 
     setJumpingToMessage(false);
+    if (found) highlightMessage(targetId);
 
-    // Scroll to target after DOM updates
+    // Re-enable observer
+    loadingRef.current = false;
     requestAnimationFrame(() => {
-      const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        highlightMessage(targetId);
+      const sentinel = sentinelRef.current;
+      if (sentinel && observerRef.current) {
+        observerRef.current.observe(sentinel);
       }
-      // Re-enable observer
-      loadingRef.current = false;
-      requestAnimationFrame(() => {
-        const sentinel = sentinelRef.current;
-        if (sentinel && observerRef.current) {
-          observerRef.current.observe(sentinel);
-        }
-      });
     });
   }, [messages, hasMore, channelId, accessToken, serverIP, protocol, highlightMessage]);
 
