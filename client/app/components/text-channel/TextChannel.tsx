@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
@@ -162,26 +163,24 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     // Preload all media in the older page before inserting
     const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
 
-    // Snapshot scroll state before prepending
+    // Snapshot scroll state, flush all updates synchronously, then restore
     const prevScrollHeight = container.scrollHeight;
     const prevScrollTop = container.scrollTop;
 
-    // Merge new OG data into cache
-    setOgCache((prev) => {
-      const merged = new Map(prev);
-      newOgEntries.forEach((v, k) => merged.set(k, v));
-      return merged;
+    flushSync(() => {
+      setOgCache((prev) => {
+        const merged = new Map(prev);
+        newOgEntries.forEach((v, k) => merged.set(k, v));
+        return merged;
+      });
+      setMessages((prev) => [...data.messages, ...prev]);
+      setHasMore(data.hasMore);
+      setLoadingMore(false);
     });
-    setMessages((prev) => [...data.messages, ...prev]);
-    setHasMore(data.hasMore);
-    setLoadingMore(false);
 
-    // After React renders, restore scroll position
-    requestAnimationFrame(() => {
-      const newScrollHeight = container.scrollHeight;
-      const addedHeight = newScrollHeight - prevScrollHeight;
-      container.scrollTop = prevScrollTop - addedHeight;
-    });
+    // DOM is now updated — restore scroll position immediately
+    const addedHeight = container.scrollHeight - prevScrollHeight;
+    container.scrollTop = prevScrollTop - addedHeight;
   }, [loadingMore, hasMore, messages, channelId, accessToken, serverIP, protocol]);
 
   // IntersectionObserver to detect scrolling to the top (oldest messages)
