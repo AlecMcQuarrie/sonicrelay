@@ -124,6 +124,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const [initialLoading, setInitialLoading] = useState(true);
   const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [replyCache, setReplyCache] = useState<Map<string, Message>>(new Map());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
@@ -142,6 +143,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     setHasMore(false);
     setInitialLoading(true);
     setReplyingTo(null);
+    setReplyCache(new Map());
     fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
       headers: { "access-token": accessToken },
     })
@@ -314,6 +316,26 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // Fetch reply targets not already loaded locally or cached
+  useEffect(() => {
+    const missingIds = messages
+      .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
+      .map((m) => m.replyToId!);
+    const uniqueIds = [...new Set(missingIds)];
+    if (uniqueIds.length === 0) return;
+
+    for (const id of uniqueIds) {
+      fetch(`${protocol}://${serverIP}/messages/${id}`, {
+        headers: { "access-token": accessToken },
+      }).then((res) => {
+        if (!res.ok) return;
+        return res.json().then((data: Message) => {
+          setReplyCache((prev) => new Map(prev).set(id, data));
+        });
+      }).catch(() => {});
+    }
+  }, [messages, replyCache, protocol, serverIP, accessToken]);
+
   const startReply = (msg: Message) => {
     setReplyingTo(msg);
     textareaRef.current?.focus();
@@ -339,6 +361,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
     // Need to paginate backwards — scroll progressively with each page
     setJumpingToMessage(true);
+    loadingRef.current = true;
     observerRef.current?.disconnect();
 
     // Immediately scroll to the top so the user sees motion right away
@@ -443,9 +466,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
 
-            // Resolve the reply target from locally loaded messages only
+            // Resolve the reply target from loaded messages or cache
             const replyTarget = msg.replyToId
-              ? messages.find((m) => m.__id === msg.replyToId) || null
+              ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
               : null;
 
             return (
@@ -476,7 +499,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                             </span>
                           </>
                         ) : (
-                          <span className="italic">Click to see original message</span>
+                          <span className="italic">Loading...</span>
                         )}
                       </div>
                     )}

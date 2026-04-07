@@ -368,6 +368,14 @@ app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   });
 });
 
+// Single message endpoint (for reply preview lookups)
+app.get("/messages/:messageId", (req: Request, res: Response) => {
+  if (!authenticate(req)) return res.sendStatus(401);
+  const message = Messages.get((m: any) => m.__id === req.params.messageId);
+  if (!message) return res.sendStatus(404);
+  return res.status(200).json(message);
+});
+
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 
 // Track connected clients
