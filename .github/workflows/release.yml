@@ -62,34 +62,35 @@ jobs:
       - name: Compile Electron TypeScript
         run: npm run electron:compile
 
-      - name: Stage for packaging
-        run: |
-          mkdir -p staging/public
-          cp -r build staging/
-          cp -r dist-electron staging/
-          cp electron-builder.yml staging/
-          cp public/SonicRelayLogo.png staging/public/
-          node -e "
-            const pkg = require('./package.json');
-            const out = { name: pkg.name, version: pkg.version, main: 'dist-electron/main.cjs', type: 'commonjs' };
-            require('fs').writeFileSync('staging/package.json', JSON.stringify(out, null, 2));
-          "
-          # CI runners can sign/edit executables (no symlink issue)
-          node -e "
-            const f = 'staging/electron-builder.yml';
-            const fs = require('fs');
-            fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('signAndEditExecutable: false', 'signAndEditExecutable: true'));
-          "
-          # Empty node_modules prevents electron-builder from traversing up to parent
-          mkdir -p staging/node_modules
-
       - name: Get Electron version
         id: electron
         run: echo "version=$(node -p "require('electron/package.json').version")" >> $GITHUB_OUTPUT
 
+      - name: Install electron-builder globally
+        run: npm install -g electron-builder
+
+      - name: Prepare packaging directory
+        run: |
+          mkdir -p packaging/public
+          cp -r build packaging/
+          cp -r dist-electron packaging/
+          cp electron-builder.yml packaging/
+          cp public/SonicRelayLogo.png packaging/public/
+          node -e "
+            const pkg = require('./package.json');
+            const out = { name: pkg.name, version: pkg.version, main: 'dist-electron/main.cjs', type: 'commonjs' };
+            require('fs').writeFileSync('packaging/package.json', JSON.stringify(out, null, 2));
+          "
+          node -e "
+            const f = 'packaging/electron-builder.yml';
+            const fs = require('fs');
+            fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('signAndEditExecutable: false', 'signAndEditExecutable: true'));
+          "
+          rm -rf node_modules
+
       - name: Build Electron app
-        working-directory: client/staging
-        run: npx --prefix .. electron-builder --publish never -c.electronVersion=${{ steps.electron.outputs.version }}
+        working-directory: client/packaging
+        run: electron-builder --publish never -c.electronVersion=${{ steps.electron.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -98,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}
-          path: client/staging/release/*
+          path: client/packaging/release/*
 
   release:
     needs: [check-version, build]
