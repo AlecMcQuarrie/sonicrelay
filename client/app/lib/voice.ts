@@ -502,6 +502,52 @@ export class VoiceClient {
     if (audio) audio.muted = muted;
   }
 
+  async switchAudioDevice(deviceId: string) {
+    if (!this.audioProducer || !this.sendTransport) return;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+    });
+    const newTrack = stream.getAudioTracks()[0];
+    await this.audioProducer.replaceTrack({ track: newTrack });
+
+    // Update local mic level monitoring
+    if (this.localUsername && this.audioContext) {
+      this.analysers.delete(this.localUsername);
+      const source = this.audioContext.createMediaStreamSource(stream);
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      this.analysers.set(this.localUsername, analyser);
+    }
+  }
+
+  async switchOutputDevice(deviceId: string) {
+    for (const audio of this.audioElements.values()) {
+      if ('setSinkId' in audio) {
+        await (audio as any).setSinkId(deviceId);
+      }
+    }
+    for (const audio of this.screenAudioElements.values()) {
+      if ('setSinkId' in audio) {
+        await (audio as any).setSinkId(deviceId);
+      }
+    }
+  }
+
+  async switchVideoDevice(deviceId: string) {
+    if (!this.videoProducer || !this.sendTransport) return;
+    // Stop old camera hardware
+    this.videoStream?.getTracks().forEach((t) => t.stop());
+    this.videoStream = await navigator.mediaDevices.getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : true,
+    });
+    const newTrack = this.videoStream.getVideoTracks()[0];
+    await this.videoProducer.replaceTrack({ track: newTrack });
+    if (this.localUsername) {
+      this.handlers.onVideoTrack(this.localUsername, newTrack);
+    }
+  }
+
   setDeafened(deafened: boolean) {
     for (const audio of this.audioElements.values()) {
       audio.muted = deafened;

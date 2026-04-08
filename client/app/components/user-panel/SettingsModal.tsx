@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Camera } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import PhotoCropModal from "./PhotoCropModal";
+import type { VoiceClient } from "~/lib/voice";
 
 interface SettingsModalProps {
   open: boolean;
@@ -11,11 +12,12 @@ interface SettingsModalProps {
   accessToken: string;
   profilePhoto?: string | null;
   onProfilePhotoChange: (url: string) => void;
+  voiceRef: RefObject<VoiceClient | null>;
 }
 
 type MediaDeviceOption = { deviceId: string; label: string };
 
-export default function SettingsModal({ open, onOpenChange, serverIP, accessToken, profilePhoto, onProfilePhotoChange }: SettingsModalProps) {
+export default function SettingsModal({ open, onOpenChange, serverIP, accessToken, profilePhoto, onProfilePhotoChange, voiceRef }: SettingsModalProps) {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceOption[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceOption[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceOption[]>([]);
@@ -48,16 +50,19 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
   const saveAudio = (deviceId: string) => {
     setSelectedAudio(deviceId);
     localStorage.setItem("preferredAudioDevice", deviceId);
+    voiceRef.current?.switchAudioDevice(deviceId);
   };
 
   const saveVideo = (deviceId: string) => {
     setSelectedVideo(deviceId);
     localStorage.setItem("preferredVideoDevice", deviceId);
+    voiceRef.current?.switchVideoDevice(deviceId);
   };
 
   const saveOutput = (deviceId: string) => {
     setSelectedOutput(deviceId);
     localStorage.setItem("preferredOutputDevice", deviceId);
+    voiceRef.current?.switchOutputDevice(deviceId);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,6 +149,7 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
                 ))}
               </select>
             </div>
+            <p className="text-xs text-muted-foreground text-center pt-2">v{__APP_VERSION__}</p>
           </div>
         </DialogContent>
       </Dialog>

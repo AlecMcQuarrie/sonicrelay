@@ -463,6 +463,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           profilePhoto={profilePhotos[username]}
           accessToken={accessToken}
           onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
+          voiceRef={voiceRef}
         />
       </div>
       <div className="flex-1 relative overflow-hidden">

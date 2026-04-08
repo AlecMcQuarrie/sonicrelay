@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { Settings } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import SettingsModal from "./SettingsModal";
+import type { VoiceClient } from "~/lib/voice";
 
 interface UserPanelProps {
   username: string;
@@ -9,9 +10,10 @@ interface UserPanelProps {
   profilePhoto?: string | null;
   accessToken: string;
   onProfilePhotoChange: (url: string) => void;
+  voiceRef: RefObject<VoiceClient | null>;
 }
 
-export default function UserPanel({ username, serverIP, profilePhoto, accessToken, onProfilePhotoChange }: UserPanelProps) {
+export default function UserPanel({ username, serverIP, profilePhoto, accessToken, onProfilePhotoChange, voiceRef }: UserPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
   const photoUrl = profilePhoto ? `${protocol}://${serverIP}${profilePhoto}` : null;
@@ -35,6 +37,7 @@ export default function UserPanel({ username, serverIP, profilePhoto, accessToke
         accessToken={accessToken}
         profilePhoto={photoUrl}
         onProfilePhotoChange={onProfilePhotoChange}
+        voiceRef={voiceRef}
       />
     </>
   );
