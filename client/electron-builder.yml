@@ -1,18 +1,22 @@
 appId: com.sonicrelay.client
 productName: SonicRelay
 directories:
-  buildResources: build
   output: release
 files:
-  - build/client/**/*
-  - dist-electron/**/*
+  - "build/client/**/*"
+  - "dist-electron/**/*"
+  - "!node_modules"
+  - "!electron"
+  - "!app"
+  - "!public"
+asar: false
+npmRebuild: false
 extraMetadata:
-  main: dist-electron/main.js
+  main: dist-electron/main.cjs
 win:
   target: portable
+  signAndEditExecutable: false
 mac:
   target: dmg
 linux:
   target: AppImage
-publish:
-  provider: github
