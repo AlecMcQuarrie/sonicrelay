@@ -1,12 +1,17 @@
 {
-  "name": "client",
+  "name": "sonicrelay-client",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
-    "typecheck": "react-router typegen && tsc"
+    "typecheck": "react-router typegen && tsc",
+    "electron:dev": "concurrently \"react-router dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:build": "cross-env ELECTRON=true react-router build && npm run electron:compile && electron-builder"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
@@ -33,9 +38,14 @@
     "@types/node": "^22",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.1.2",
+    "electron-builder": "^26.0.12",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.9.3",
     "vite": "^7.1.7",
-    "vite-tsconfig-paths": "^5.1.4"
+    "vite-tsconfig-paths": "^5.1.4",
+    "wait-on": "^8.0.3"
   }
 }
