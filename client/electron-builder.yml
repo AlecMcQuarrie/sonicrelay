@@ -13,6 +13,8 @@ nodeGypRebuild: false
 buildDependenciesFromSource: false
 extraMetadata:
   main: dist-electron/main.cjs
+  type: commonjs
+icon: public/SonicRelayLogo.png
 win:
   target: portable
   signAndEditExecutable: false

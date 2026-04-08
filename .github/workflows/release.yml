@@ -62,7 +62,23 @@ jobs:
       - name: Compile Electron TypeScript
         run: npm run electron:compile
 
+      - name: Stage for packaging
+        run: |
+          mkdir -p staging/public
+          cp -r build staging/
+          cp -r dist-electron staging/
+          cp electron-builder.yml staging/
+          cp public/SonicRelayLogo.png staging/public/
+          node -e "
+            const pkg = require('./package.json');
+            const out = { name: pkg.name, version: pkg.version, main: 'dist-electron/main.cjs', type: 'commonjs' };
+            require('fs').writeFileSync('staging/package.json', JSON.stringify(out, null, 2));
+          "
+          # CI runners can sign/edit executables (no symlink issue)
+          sed -i 's/signAndEditExecutable: false/signAndEditExecutable: true/' staging/electron-builder.yml
+
       - name: Build Electron app
+        working-directory: client/staging
         run: npx electron-builder --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,7 +88,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}
-          path: client/${{ matrix.artifact }}
+          path: client/staging/release/*
 
   release:
     needs: [check-version, build]
