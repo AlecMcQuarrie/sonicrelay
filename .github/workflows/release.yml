@@ -35,11 +35,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: dist-electron/*.exe
+            artifact: release/*.exe
           - os: macos-latest
-            artifact: dist-electron/*.dmg
+            artifact: release/*.dmg
           - os: ubuntu-latest
-            artifact: dist-electron/*.AppImage
+            artifact: release/*.AppImage
     runs-on: ${{ matrix.os }}
     defaults:
       run:

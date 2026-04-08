@@ -2,15 +2,12 @@ appId: com.sonicrelay.client
 productName: SonicRelay
 directories:
   buildResources: build
-  output: dist-electron
+  output: release
 files:
   - build/client/**/*
-  - electron/**/*.js
-  - "!node_modules/**/*"
-  - node_modules/**/*.js
-  - node_modules/**/*.json
+  - dist-electron/**/*
 extraMetadata:
-  main: electron/main.js
+  main: dist-electron/main.js
 win:
   target: portable
 mac:
