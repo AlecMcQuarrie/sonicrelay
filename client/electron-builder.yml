@@ -9,8 +9,6 @@ files:
   - "!node_modules/**/*"
 asar: false
 npmRebuild: false
-nodeGypRebuild: false
-buildDependenciesFromSource: false
 extraMetadata:
   main: dist-electron/main.cjs
   type: commonjs
@@ -23,3 +21,4 @@ mac:
   identity: null
 linux:
   target: AppImage
+publish: null
