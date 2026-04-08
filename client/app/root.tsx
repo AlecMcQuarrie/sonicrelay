@@ -13,6 +13,7 @@ import { ThemeProvider } from "~/components/theme-provider/ThemeProvider"
 import { ModeToggle } from "~/components/mode-toggle/ModeToggle"
 
 export const links: Route.LinksFunction = () => [
+  { rel: "icon", type: "image/png", href: "/SonicRelayLogo.png" },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {
     rel: "preconnect",

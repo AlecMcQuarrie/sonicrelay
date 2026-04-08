@@ -47,6 +47,9 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    icon: isDev
+      ? path.join(__dirname, '..', 'public', 'SonicRelayLogo.png')
+      : path.join(__dirname, '..', 'build', 'client', 'SonicRelayLogo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
