@@ -5,12 +5,12 @@ directories:
 files:
   - "build/client/**/*"
   - "dist-electron/**/*"
-  - "!node_modules"
-  - "!electron"
-  - "!app"
-  - "!public"
+  - "package.json"
+  - "!node_modules/**/*"
 asar: false
 npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
 extraMetadata:
   main: dist-electron/main.cjs
 win:
@@ -18,5 +18,6 @@ win:
   signAndEditExecutable: false
 mac:
   target: dmg
+  identity: null
 linux:
   target: AppImage
