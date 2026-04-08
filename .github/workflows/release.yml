@@ -80,6 +80,8 @@ jobs:
             const fs = require('fs');
             fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('signAndEditExecutable: false', 'signAndEditExecutable: true'));
           "
+          # Empty node_modules prevents electron-builder from traversing up to parent
+          mkdir -p staging/node_modules
 
       - name: Get Electron version
         id: electron
@@ -87,7 +89,7 @@ jobs:
 
       - name: Build Electron app
         working-directory: client/staging
-        run: npx electron-builder --publish never -c.electronVersion=${{ steps.electron.outputs.version }}
+        run: npx --prefix .. electron-builder --publish never -c.electronVersion=${{ steps.electron.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
