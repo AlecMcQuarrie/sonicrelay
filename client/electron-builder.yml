@@ -15,7 +15,7 @@ extraMetadata:
 icon: public/SonicRelayLogo.png
 win:
   target: portable
-  signAndEditExecutable: false
+  executableName: SonicRelay
 mac:
   target: dmg
   identity: null
