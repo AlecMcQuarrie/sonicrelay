@@ -77,9 +77,13 @@ jobs:
           # CI runners can sign/edit executables (no symlink issue)
           sed -i 's/signAndEditExecutable: false/signAndEditExecutable: true/' staging/electron-builder.yml
 
+      - name: Get Electron version
+        id: electron
+        run: echo "version=$(node -p "require('electron/package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Build Electron app
         working-directory: client/staging
-        run: npx electron-builder --publish never
+        run: npx electron-builder --publish never -c.electronVersion=${{ steps.electron.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
