@@ -567,7 +567,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       });
       const message = {
         type: 'text-message',
-        __id: stored.$id,
+        __id: (stored as any).__id,
         channelId: msg.channelId,
         messageContent: msg.messageContent,
         attachments,
