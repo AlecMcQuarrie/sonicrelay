@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, protocol, net } from 'electron';
+import { app, BrowserWindow, session, protocol, net, desktopCapturer } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { pathToFileURL } from 'url';
@@ -15,6 +15,8 @@ protocol.registerSchemesAsPrivileged([{
     stream: true,
   },
 }]);
+
+app.setAppUserModelId('com.sonicrelay.client');
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -37,6 +39,17 @@ app.on('ready', () => {
       return net.fetch(pathToFileURL(filePath).toString());
     });
   }
+
+  // Allow getDisplayMedia() in the renderer by providing a screen source
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
+    // Provide the first screen source (entire screen) by default
+    if (sources.length > 0) {
+      callback({ video: sources[0], audio: 'loopback' });
+    } else {
+      callback({});
+    }
+  });
 
   createWindow();
 });
