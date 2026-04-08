@@ -75,7 +75,11 @@ jobs:
             require('fs').writeFileSync('staging/package.json', JSON.stringify(out, null, 2));
           "
           # CI runners can sign/edit executables (no symlink issue)
-          sed -i 's/signAndEditExecutable: false/signAndEditExecutable: true/' staging/electron-builder.yml
+          node -e "
+            const f = 'staging/electron-builder.yml';
+            const fs = require('fs');
+            fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('signAndEditExecutable: false', 'signAndEditExecutable: true'));
+          "
 
       - name: Get Electron version
         id: electron
