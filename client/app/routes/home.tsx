@@ -36,8 +36,9 @@ export default function Home() {
 
     if (data) {
       const parsedData = JSON.parse(data);
-      // Force re-login if account is missing encryption keys
-      if (!parsedData.encryptedPrivateKey || !parsedData.pbkdfSalt) {
+      // Force re-login if account is missing encryption keys or has old format
+      const epk = parsedData.encryptedPrivateKey;
+      if (!epk || !parsedData.pbkdfSalt || !epk.startsWith('{')) {
         localStorage.removeItem("connectionData");
         setIsNewSession(true);
         return;
@@ -85,7 +86,8 @@ export default function Home() {
     let finalPbkdfSalt = isRegistration ? body.pbkdfSalt : data.pbkdfSalt;
 
     if (!isRegistration) {
-      if (data.encryptedPrivateKey && data.pbkdfSalt) {
+      const hasValidKeys = data.encryptedPrivateKey && data.pbkdfSalt && data.encryptedPrivateKey.startsWith('{');
+      if (hasValidKeys) {
         const salt = new Uint8Array(base64ToArrayBuffer(data.pbkdfSalt));
         const wrappingKey = await deriveWrappingKey(password, salt);
         unlockedPrivateKey = await unwrapPrivateKey(data.encryptedPrivateKey, wrappingKey);

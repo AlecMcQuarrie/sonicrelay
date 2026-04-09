@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SendHorizontal, Lock } from "lucide-react";
+import { SendHorizontal, ShieldCheck } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import { Skeleton } from "~/components/ui/skeleton";
 import { importPublicKey, deriveSharedSecret, encrypt, decrypt } from "~/lib/crypto";
@@ -215,8 +215,10 @@ export default function DirectMessage({
       <div className="flex items-center gap-2 p-4 border-b">
         <Avatar username={partner} profilePhoto={partnerPhotoUrl} />
         <span className="font-bold">{partner}</span>
-        <Lock className="w-3.5 h-3.5 text-muted-foreground ml-1" />
-        <span className="text-xs text-muted-foreground">End-to-end encrypted</span>
+        <span className="ml-auto flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-full bg-green-500/15 text-green-500 shrink-0">
+          <ShieldCheck className="w-3.5 h-3.5" />
+          E2E ENCRYPTED
+        </span>
       </div>
 
       {/* Messages */}
