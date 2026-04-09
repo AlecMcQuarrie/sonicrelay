@@ -15,11 +15,12 @@ interface UserListProps {
   userRoles: Record<string, Role>;
   onBan: (username: string) => void;
   onSetRole: (username: string, role: Role) => void;
+  onStartDm: (username: string) => void;
 }
 
 export default function UserList({
   users, onlineUsers, profilePhotos, serverIP,
-  myUsername, myRole, userRoles, onBan, onSetRole,
+  myUsername, myRole, userRoles, onBan, onSetRole, onStartDm,
 }: UserListProps) {
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
   const [banTarget, setBanTarget] = useState<string | null>(null);
@@ -60,6 +61,7 @@ export default function UserList({
               onPromote={() => onSetRole(user, 'admin')}
               onDemote={() => onSetRole(user, 'member')}
               onBanClick={() => setBanTarget(user)}
+              onMessage={() => onStartDm(user)}
             />
           );
         })}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Hash, Volume2, MicOff, HeadphoneOff, Plus } from "lucide-react";
+import { Hash, Volume2, MicOff, HeadphoneOff, Plus, Lock, MessageSquare } from "lucide-react";
+import Avatar from "~/components/ui/avatar";
 import PeerVolumeMenu from "./PeerVolumeMenu";
 import ScreenAudioControls from "./ScreenAudioControls";
 import CreateChannelDialog from "./CreateChannelDialog";
@@ -46,6 +47,15 @@ interface ChannelSidebarProps {
   onUserMute: (username: string, muted: boolean) => void;
   canCreateChannel: boolean;
   onCreateChannel: (name: string, type: "text" | "voice") => void;
+  dmConversations: { partner: string; lastTimestamp: string }[];
+  selectedDmPartner: string | null;
+  onSelectDm: (partner: string) => void;
+  privateKey: CryptoKey | null;
+  encryptedPrivateKey: string | null;
+  pbkdfSalt: string | null;
+  onUnlockDms: () => void;
+  profilePhotos: Record<string, string | null>;
+  serverIP: string;
 }
 
 function pingColor(ms: number): string {
@@ -174,6 +184,15 @@ export default function ChannelSidebar({
   onUserMute,
   canCreateChannel,
   onCreateChannel,
+  dmConversations,
+  selectedDmPartner,
+  onSelectDm,
+  privateKey,
+  encryptedPrivateKey,
+  pbkdfSalt,
+  onUnlockDms,
+  profilePhotos,
+  serverIP,
 }: ChannelSidebarProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
@@ -257,6 +276,46 @@ export default function ChannelSidebar({
             ))}
           </div>
         ))}
+      </div>
+
+      {/* Direct Messages */}
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground flex items-center justify-between">
+        Direct Messages
+        {!privateKey && encryptedPrivateKey && pbkdfSalt && (
+          <button onClick={onUnlockDms} className="hover:text-foreground transition-colors" title="Unlock DMs">
+            <Lock className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      <div className="px-2 pb-1 space-y-1">
+        {!privateKey && encryptedPrivateKey && pbkdfSalt ? (
+          <button
+            onClick={onUnlockDms}
+            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent rounded-md"
+          >
+            <Lock className="w-4 h-4" />
+            <span>Unlock to view DMs</span>
+          </button>
+        ) : dmConversations.length === 0 ? (
+          <div className="px-2 py-1.5 text-sm text-muted-foreground">No conversations yet</div>
+        ) : (
+          dmConversations.map((conv) => {
+            const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+            const photo = profilePhotos[conv.partner];
+            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            return (
+              <Button
+                key={conv.partner}
+                variant={conv.partner === selectedDmPartner ? "secondary" : "ghost"}
+                className="w-full justify-start"
+                onClick={() => onSelectDm(conv.partner)}
+              >
+                <Avatar username={conv.partner} profilePhoto={photoUrl} size="sm" />
+                <span className="ml-1 truncate">{conv.partner}</span>
+              </Button>
+            );
+          })
+        )}
       </div>
 
       <CreateChannelDialog

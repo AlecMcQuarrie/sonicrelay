@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
+import DirectMessage from "~/components/dm/DirectMessage";
 import FocusedVideo from "~/components/focused-video/FocusedVideo";
 import TextChannel from "~/components/text-channel/TextChannel";
+import UnlockModal from "~/components/unlock-modal/UnlockModal";
 import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
@@ -20,9 +22,13 @@ interface ServerProps {
   serverIP: string;
   accessToken: string;
   username: string;
+  privateKey: CryptoKey | null;
+  encryptedPrivateKey: string | null;
+  pbkdfSalt: string | null;
+  onPrivateKeyUnlocked: (key: CryptoKey) => void;
 }
 
-export default function Server({ serverIP, accessToken, username }: ServerProps) {
+export default function Server({ serverIP, accessToken, username, privateKey, encryptedPrivateKey, pbkdfSalt, onPrivateKeyUnlocked }: ServerProps) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
@@ -46,6 +52,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
+  const [selectedDmPartner, setSelectedDmPartner] = useState<string | null>(null);
+  const [dmConversations, setDmConversations] = useState<{ partner: string; lastTimestamp: string }[]>([]);
+  const [publicKeys, setPublicKeys] = useState<Record<string, string>>({});
+  const [unlockModalOpen, setUnlockModalOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
@@ -76,12 +86,15 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         setAllUsers(data.users.map((u: { username: string }) => u.username));
         const photos: Record<string, string | null> = {};
         const roles: Record<string, Role> = {};
-        data.users.forEach((u: { username: string; profilePhoto: string | null; role: Role }) => {
+        const keys: Record<string, string> = {};
+        data.users.forEach((u: { username: string; profilePhoto: string | null; role: Role; publicKey: string | null }) => {
           photos[u.username] = u.profilePhoto;
           roles[u.username] = u.role || 'member';
+          if (u.publicKey) keys[u.username] = u.publicKey;
         });
         setProfilePhotos(photos);
         setUserRoles(roles);
+        setPublicKeys(keys);
       });
 
     fetch(`${protocol}://${serverIP}/me`, {
@@ -102,6 +115,12 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     })
       .then((res) => res.json())
       .then((data) => setScreenAudioPeerSettings(data.screenAudioPeerSettings || {}));
+
+    fetch(`${protocol}://${serverIP}/dm/conversations`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setDmConversations(data.conversations || []));
 
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
@@ -245,6 +264,14 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
       if (msg.type === 'role-changed') {
         setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
         if (msg.username === username) setMyRole(msg.role);
+      }
+      if (msg.type === 'dm-message') {
+        // Update DM conversation list when a new DM arrives
+        const partner = msg.sender === username ? msg.recipient : msg.sender;
+        setDmConversations((prev) => {
+          const filtered = prev.filter((c) => c.partner !== partner);
+          return [{ partner, lastTimestamp: msg.timestamp }, ...filtered];
+        });
       }
       if (msg.type === 'user-banned') {
         setAllUsers((prev) => prev.filter((u) => u !== msg.username));
@@ -418,6 +445,29 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     if (type === "text") setSelectedTextChannelId(channel.__id);
   }, [protocol, serverIP, accessToken]);
 
+  const startDm = useCallback((partner: string) => {
+    if (partner === username) return;
+    // If private key isn't unlocked yet, open the unlock modal
+    if (!privateKey) {
+      if (encryptedPrivateKey && pbkdfSalt) {
+        setUnlockModalOpen(true);
+      }
+      return;
+    }
+    setSelectedDmPartner(partner);
+    setSelectedTextChannelId(null);
+    // Add to conversation list if not already present
+    setDmConversations((prev) => {
+      if (prev.some((c) => c.partner === partner)) return prev;
+      return [{ partner, lastTimestamp: new Date().toISOString() }, ...prev];
+    });
+  }, [username, privateKey, encryptedPrivateKey, pbkdfSalt]);
+
+  const selectTextChannel = useCallback((channelId: string) => {
+    setSelectedTextChannelId(channelId);
+    setSelectedDmPartner(null);
+  }, []);
+
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
@@ -440,7 +490,16 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           screenTracks={screenTracks}
           screenAudioUsers={screenAudioUsers}
           focusedFeeds={focusedVideoUsers}
-          onSelectTextChannel={setSelectedTextChannelId}
+          onSelectTextChannel={selectTextChannel}
+          dmConversations={dmConversations}
+          selectedDmPartner={selectedDmPartner}
+          onSelectDm={startDm}
+          privateKey={privateKey}
+          encryptedPrivateKey={encryptedPrivateKey}
+          pbkdfSalt={pbkdfSalt}
+          onUnlockDms={() => setUnlockModalOpen(true)}
+          profilePhotos={profilePhotos}
+          serverIP={serverIP}
           screenAudioPeerSettings={screenAudioPeerSettings}
           onScreenAudioVolume={handleScreenAudioVolume}
           onScreenAudioMute={handleScreenAudioMute}
@@ -487,7 +546,18 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
         />
       </div>
       <div className="flex-1 relative overflow-hidden">
-        {selectedTextChannel ? (
+        {selectedDmPartner && privateKey && publicKeys[selectedDmPartner] ? (
+          <DirectMessage
+            serverIP={serverIP}
+            partner={selectedDmPartner}
+            accessToken={accessToken}
+            username={username}
+            wsRef={wsRef}
+            profilePhotos={profilePhotos}
+            privateKey={privateKey}
+            partnerPublicKey={publicKeys[selectedDmPartner]}
+          />
+        ) : selectedTextChannel ? (
           <TextChannel
             serverIP={serverIP}
             channelId={selectedTextChannel.__id}
@@ -497,6 +567,7 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             wsRef={wsRef}
             profilePhotos={profilePhotos}
             myRole={myRole}
+            onStartDm={startDm}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -538,8 +609,18 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           userRoles={userRoles}
           onBan={banUser}
           onSetRole={setUserRole}
+          onStartDm={startDm}
         />
       </div>
+      {encryptedPrivateKey && pbkdfSalt && !privateKey && (
+        <UnlockModal
+          open={unlockModalOpen}
+          onOpenChange={setUnlockModalOpen}
+          encryptedPrivateKey={encryptedPrivateKey}
+          pbkdfSalt={pbkdfSalt}
+          onUnlocked={onPrivateKeyUnlocked}
+        />
+      )}
     </div>
   );
 }

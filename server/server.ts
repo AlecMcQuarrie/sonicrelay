@@ -36,6 +36,9 @@ type User = {
   screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
   role: Role;
   banned: boolean;
+  publicKey: string | null;
+  encryptedPrivateKey: string | null;
+  pbkdfSalt: string | null;
   $id: string;
 };
 const Users = db.createCollection<User>("users");
@@ -74,6 +77,16 @@ type Message = {
   $id: string;
 };
 const Messages = db.createCollection<Message>("messages");
+
+type DirectMessage = {
+  conversationId: string;
+  sender: string;
+  iv: string;
+  ciphertext: string;
+  timestamp: string;
+  $id: string;
+};
+const DirectMessages = db.createCollection<DirectMessage>("direct_messages");
 
 // Seed default channels if none exist
 if (Channels.getAll().length === 0) {
@@ -131,6 +144,9 @@ app.post("/signup", async (req: Request, res: Response) => {
     screenAudioPeerSettings: null,
     role: 'member' as Role,
     banned: false,
+    publicKey: req.body.publicKey || null,
+    encryptedPrivateKey: req.body.encryptedPrivateKey || null,
+    pbkdfSalt: req.body.pbkdfSalt || null,
   };
   Users.create(user);
 
@@ -157,7 +173,11 @@ app.post("/login", async (req: Request, res: Response) => {
       { username: user.username },
       process.env.ENCRYPTION_KEY,
     );
-    return res.status(200).json({ accessToken: token });
+    return res.status(200).json({
+      accessToken: token,
+      encryptedPrivateKey: (user as any).encryptedPrivateKey || null,
+      pbkdfSalt: (user as any).pbkdfSalt || null,
+    });
   }
 
   // Send 200 if successful
@@ -254,6 +274,7 @@ app.get("/users", (req: Request, res: Response) => {
       username: u.username,
       profilePhoto: u.profilePhoto || null,
       role: (u.role || 'member') as Role,
+      publicKey: (u as any).publicKey || null,
     }));
   return res.status(200).json({ users });
 });
@@ -380,6 +401,58 @@ app.get("/messages/:messageId", (req: Request, res: Response) => {
   const message = Messages.get((m: any) => m.__id === req.params.messageId);
   if (!message) return res.sendStatus(404);
   return res.status(200).json(message);
+});
+
+// DM conversations — list distinct conversation partners for the current user
+app.get("/dm/conversations", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+
+  const allDms = DirectMessages.getAll() as any[];
+  const convMap = new Map<string, string>(); // partner -> lastTimestamp
+
+  for (const dm of allDms) {
+    const [userA, userB] = dm.conversationId.split(':');
+    let partner: string;
+    if (userA === auth.username) partner = userB;
+    else if (userB === auth.username) partner = userA;
+    else continue;
+
+    const existing = convMap.get(partner);
+    if (!existing || dm.timestamp > existing) {
+      convMap.set(partner, dm.timestamp);
+    }
+  }
+
+  const conversations = Array.from(convMap.entries())
+    .map(([partner, lastTimestamp]) => ({ partner, lastTimestamp }))
+    .sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp));
+
+  return res.status(200).json({ conversations });
+});
+
+// DM messages — paginated encrypted messages between current user and :partner
+app.get("/dm/messages/:partner", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const conversationId = [auth.username, req.params.partner].sort().join(':');
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+  const before = req.query.before as string | undefined;
+
+  let all = DirectMessages.getAll()
+    .filter((m: any) => m.conversationId === conversationId)
+    .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp)); // newest first
+
+  if (before) {
+    const idx = all.findIndex((m: any) => (m as any).__id === before);
+    if (idx !== -1) all = all.slice(idx + 1);
+  }
+
+  const page = all.slice(0, limit);
+  return res.status(200).json({
+    messages: page.reverse(), // return oldest→newest for display
+    hasMore: all.length > limit,
+  });
 });
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
@@ -606,6 +679,38 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       for (const [client] of clients) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({ type: 'delete-message', messageId: msg.messageId }));
+        }
+      }
+      return;
+    }
+
+    // ── Direct message (E2E encrypted) ──
+    if (msg.type === 'dm-message') {
+      const conversationId = [username, msg.recipient].sort().join(':');
+      const timestamp = new Date().toISOString();
+      const stored = DirectMessages.create({
+        conversationId,
+        sender: username,
+        iv: msg.iv,
+        ciphertext: msg.ciphertext,
+        timestamp,
+      });
+      const outgoing = {
+        type: 'dm-message',
+        __id: (stored as any).__id,
+        conversationId,
+        sender: username,
+        recipient: msg.recipient,
+        iv: msg.iv,
+        ciphertext: msg.ciphertext,
+        timestamp,
+      };
+      // Echo to sender
+      ws.send(JSON.stringify(outgoing));
+      // Send to recipient if online
+      for (const [clientWs, client] of clients) {
+        if (client.username === msg.recipient && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(JSON.stringify(outgoing));
         }
       }
       return;

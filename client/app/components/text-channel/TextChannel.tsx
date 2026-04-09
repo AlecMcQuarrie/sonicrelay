@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown, Reply, CornerUpLeft } from "lucide-react";
+import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown, Reply, CornerUpLeft, MessageSquare } from "lucide-react";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
 import MessageSkeletons from "./MessageSkeletons";
@@ -111,9 +111,10 @@ interface TextChannelProps {
   wsRef: React.RefObject<WebSocket | null>;
   profilePhotos: Record<string, string | null>;
   myRole: 'superadmin' | 'admin' | 'member';
+  onStartDm?: (username: string) => void;
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos, myRole }: TextChannelProps) {
+export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos, myRole, onStartDm }: TextChannelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -556,6 +557,12 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                   <Reply className="w-4 h-4 mr-2" />
                   Reply
                 </ContextMenuItem>
+                {onStartDm && msg.sender !== username && (
+                  <ContextMenuItem onClick={() => onStartDm(msg.sender)} className="cursor-pointer">
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    Message
+                  </ContextMenuItem>
+                )}
               </ContextMenuContent>
             </ContextMenu>
             );

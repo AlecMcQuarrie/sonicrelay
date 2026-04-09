@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { MessageSquare } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import RoleBadge from "~/components/ui/role-badge";
 import {
@@ -21,9 +22,10 @@ interface UserRowProps {
   onPromote: () => void;
   onDemote: () => void;
   onBanClick: () => void;
+  onMessage: () => void;
 }
 
-export default function UserRow({ user, online, photoUrl, targetRole, myRole, isSelf, onPromote, onDemote, onBanClick }: UserRowProps) {
+export default function UserRow({ user, online, photoUrl, targetRole, myRole, isSelf, onPromote, onDemote, onBanClick, onMessage }: UserRowProps) {
   const [open, setOpen] = useState(false);
 
   const canPromote = !isSelf
@@ -64,6 +66,11 @@ export default function UserRow({ user, online, photoUrl, targetRole, myRole, is
         </div>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem disabled={isSelf} onSelect={onMessage}>
+          <MessageSquare className="w-4 h-4 mr-2" />
+          Message
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         {targetRole === 'admin' ? (
           <DropdownMenuItem disabled={!canDemote} onSelect={onDemote}>Remove admin</DropdownMenuItem>
         ) : (
