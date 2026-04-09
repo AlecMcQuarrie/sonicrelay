@@ -5,7 +5,7 @@ import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
 import MessageSkeletons from "./MessageSkeletons";
 import Avatar from "~/components/ui/avatar";
-import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "~/components/ui/context-menu";
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
 import { cn } from "~/lib/utils";
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
@@ -479,7 +479,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
             <ContextMenu key={msg.__id || i}>
               <ContextMenuTrigger asChild>
                 <div data-msg-id={msg.__id} className={cn(
-                  "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700",
+                  "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700 cursor-pointer hover:bg-accent/50",
                   highlightedMessageId === msg.__id && "bg-primary/15"
                 )}>
                   <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
@@ -553,15 +553,24 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                <ContextMenuItem onClick={() => startReply(msg)} className="cursor-pointer">
+                <ContextMenuItem onSelect={() => startReply(msg)} className="cursor-pointer">
                   <Reply className="w-4 h-4 mr-2" />
                   Reply
                 </ContextMenuItem>
                 {onStartDm && msg.sender !== username && (
-                  <ContextMenuItem onClick={() => onStartDm(msg.sender)} className="cursor-pointer">
+                  <ContextMenuItem onSelect={() => onStartDm(msg.sender)} className="cursor-pointer">
                     <MessageSquare className="w-4 h-4 mr-2" />
                     Message
                   </ContextMenuItem>
+                )}
+                {(msg.sender === username || myRole !== 'member') && msg.__id && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={() => deleteMessage(msg.__id!)} className="cursor-pointer text-destructive focus:text-destructive">
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete
+                    </ContextMenuItem>
+                  </>
                 )}
               </ContextMenuContent>
             </ContextMenu>
