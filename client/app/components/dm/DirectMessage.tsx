@@ -1,15 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SendHorizontal, ShieldCheck } from "lucide-react";
+import { flushSync } from "react-dom";
+import { ShieldCheck, X, FileIcon, Trash2, ArrowDown, Reply, CornerUpLeft } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
-import { Skeleton } from "~/components/ui/skeleton";
+import MessageHeader from "~/components/ui/message-header";
+import MessageInput from "~/components/ui/message-input";
+import MessageAttachments from "~/components/text-channel/MessageAttachments";
+import MessageContent from "~/components/text-channel/MessageContent";
+import MessageSkeletons from "~/components/text-channel/MessageSkeletons";
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
+import { cn } from "~/lib/utils";
 import { importPublicKey, deriveSharedSecret, encrypt, decrypt } from "~/lib/crypto";
 import { getProtocol } from "~/lib/protocol";
+import { preloadAllMedia } from "~/lib/preload-media";
+import type { OgData } from "~/lib/preload-media";
 
 type DecryptedMessage = {
   __id: string;
   sender: string;
   text: string;
   timestamp: string;
+  attachments: string[];
+  replyToId: string | null;
 };
 
 interface DirectMessageProps {
@@ -38,21 +49,54 @@ export default function DirectMessage({
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
+  const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
+  const [replyCache, setReplyCache] = useState<Map<string, DecryptedMessage | 'deleted'>>(new Map());
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
   const sharedKeyRef = useRef<CryptoKey | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadingRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const protocol = getProtocol(serverIP);
+
+  async function decryptMessages(
+    encrypted: { __id: string; sender: string; iv: string; ciphertext: string; timestamp: string; attachments?: string[]; replyToId?: string | null }[],
+    sharedKey: CryptoKey,
+  ): Promise<DecryptedMessage[]> {
+    const results: DecryptedMessage[] = [];
+    for (const msg of encrypted) {
+      try {
+        const text = await decrypt(sharedKey, msg.iv, msg.ciphertext);
+        results.push({
+          __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp,
+          attachments: msg.attachments || [], replyToId: msg.replyToId ?? null,
+        });
+      } catch {
+        results.push({
+          __id: msg.__id, sender: msg.sender, text: "[unable to decrypt]", timestamp: msg.timestamp,
+          attachments: msg.attachments || [], replyToId: msg.replyToId ?? null,
+        });
+      }
+    }
+    return results;
+  }
 
   // Derive the shared secret and load initial messages
   useEffect(() => {
     setMessages([]);
     setHasMore(false);
     setInitialLoading(true);
+    setReplyingTo(null);
+    setReplyCache(new Map());
     sharedKeyRef.current = null;
 
     async function init() {
@@ -64,8 +108,9 @@ export default function DirectMessage({
         headers: { "access-token": accessToken },
       });
       const data = await res.json();
-
       const decrypted = await decryptMessages(data.messages, sharedKey);
+      const cache = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
+      setOgCache(cache);
       setMessages(decrypted);
       setHasMore(data.hasMore);
       setInitialLoading(false);
@@ -80,9 +125,14 @@ export default function DirectMessage({
 
     const handler = async (event: MessageEvent) => {
       const msg = JSON.parse(event.data);
+
+      if (msg.type === 'dm-delete-message') {
+        setMessages((prev) => prev.filter((m) => m.__id !== msg.messageId));
+        return;
+      }
+
       if (msg.type !== "dm-message") return;
 
-      // Only handle messages for this conversation
       const isFromPartner = msg.sender === partner;
       const isEcho = msg.sender === username && msg.recipient === partner;
       if (!isFromPartner && !isEcho) return;
@@ -93,9 +143,11 @@ export default function DirectMessage({
       try {
         const text = await decrypt(sharedKey, msg.iv, msg.ciphertext);
         setMessages((prev) => {
-          // Avoid duplicates (echo from own send)
           if (prev.some((m) => m.__id === msg.__id)) return prev;
-          return [...prev, { __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp }];
+          return [...prev, {
+            __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp,
+            attachments: msg.attachments || [], replyToId: msg.replyToId ?? null,
+          }];
         });
       } catch {
         // Decryption failed — ignore
@@ -113,7 +165,7 @@ export default function DirectMessage({
     if (!sentinel || !hasMore) return;
 
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadOlder(); },
+      ([entry]) => { if (entry.isIntersecting && !loadingRef.current) loadOlder(); },
       { root: scrollContainerRef.current, threshold: 0 },
     );
     observer.observe(sentinel);
@@ -138,7 +190,13 @@ export default function DirectMessage({
       );
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
+      const newOgEntries = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
 
+      setOgCache((prev) => {
+        const merged = new Map(prev);
+        newOgEntries.forEach((v, k) => merged.set(k, v));
+        return merged;
+      });
       setMessages((prev) => [...decrypted, ...prev]);
       setHasMore(data.hasMore);
     } catch {
@@ -146,73 +204,225 @@ export default function DirectMessage({
     } finally {
       setLoadingMore(false);
       loadingRef.current = false;
+      requestAnimationFrame(() => {
+        const sentinel = sentinelRef.current;
+        if (sentinel && observerRef.current) {
+          observerRef.current.observe(sentinel);
+        }
+      });
     }
   }, [hasMore, messages, partner, accessToken]);
 
-  async function decryptMessages(
-    encrypted: { __id: string; sender: string; iv: string; ciphertext: string; timestamp: string }[],
-    sharedKey: CryptoKey,
-  ): Promise<DecryptedMessage[]> {
-    const results: DecryptedMessage[] = [];
-    for (const msg of encrypted) {
-      try {
-        const text = await decrypt(sharedKey, msg.iv, msg.ciphertext);
-        results.push({ __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp });
-      } catch {
-        results.push({ __id: msg.__id, sender: msg.sender, text: "[unable to decrypt]", timestamp: msg.timestamp });
-      }
-    }
-    return results;
-  }
+  // Track scroll position for jump-to-bottom button
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const onScroll = () => setShowJumpToBottom(container.scrollTop < -100);
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
 
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || !sharedKeyRef.current) return;
+  const jumpToBottom = () => {
+    const container = scrollContainerRef.current;
+    if (container) container.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Fetch reply targets — decrypt them client-side
+  useEffect(() => {
+    const sharedKey = sharedKeyRef.current;
+    if (!sharedKey) return;
+
+    const missingIds = messages
+      .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
+      .map((m) => m.replyToId!);
+    const uniqueIds = [...new Set(missingIds)];
+    if (uniqueIds.length === 0) return;
+
+    for (const id of uniqueIds) {
+      fetch(`${protocol}://${serverIP}/dm/message/${id}`, {
+        headers: { "access-token": accessToken },
+      }).then(async (res) => {
+        if (res.status === 404) {
+          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+        } else if (res.ok) {
+          const data = await res.json();
+          try {
+            const text = await decrypt(sharedKey, data.iv, data.ciphertext);
+            setReplyCache((prev) => new Map(prev).set(id, {
+              __id: data.__id, sender: data.sender, text, timestamp: data.timestamp,
+              attachments: data.attachments || [], replyToId: data.replyToId ?? null,
+            }));
+          } catch {
+            setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+          }
+        }
+      }).catch(() => {});
+    }
+  }, [messages, replyCache, protocol, serverIP, accessToken]);
+
+  const startReply = (msg: DecryptedMessage) => {
+    setReplyingTo(msg);
+    textareaRef.current?.focus();
+  };
+
+  const highlightMessage = useCallback((id: string) => {
+    setHighlightedMessageId(id);
+    setTimeout(() => setHighlightedMessageId(null), 2000);
+  }, []);
+
+  const jumpToMessage = useCallback(async (targetId: string) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const sharedKey = sharedKeyRef.current;
+    if (!sharedKey) return;
+
+    const existing = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+    if (existing) {
+      existing.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightMessage(targetId);
+      return;
+    }
+
+    setJumpingToMessage(true);
+    loadingRef.current = true;
+    observerRef.current?.disconnect();
+    container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
+
+    let currentMessages = [...messages];
+    let moreAvailable = hasMore;
+    let found = false;
+
+    while (moreAvailable && !found) {
+      const oldest = currentMessages[0];
+      if (!oldest?.__id) break;
+
+      const res = await fetch(
+        `${protocol}://${serverIP}/dm/messages/${partner}?limit=50&before=${oldest.__id}`,
+        { headers: { "access-token": accessToken } },
+      );
+      const data = await res.json();
+      const decrypted = await decryptMessages(data.messages, sharedKey);
+      const newOgEntries = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
+
+      flushSync(() => {
+        setOgCache((prev) => {
+          const merged = new Map(prev);
+          newOgEntries.forEach((v, k) => merged.set(k, v));
+          return merged;
+        });
+        setMessages((prev) => [...decrypted, ...prev]);
+        setHasMore(data.hasMore);
+      });
+
+      currentMessages = [...decrypted, ...currentMessages];
+      moreAvailable = data.hasMore;
+
+      if (decrypted.some((m) => m.__id === targetId)) {
+        found = true;
+      }
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          if (!found) container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
+          resolve();
+        });
+      });
+    }
+
+    setJumpingToMessage(false);
+
+    if (found) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const el = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
+          if (el) {
+            const containerRect = container.getBoundingClientRect();
+            const elRect = el.getBoundingClientRect();
+            const offset = elRect.top - containerRect.top - (containerRect.height / 2) + (elRect.height / 2);
+            container.scrollTop += offset;
+          }
+          resolve();
+        }));
+      });
+      highlightMessage(targetId);
+    }
+
+    loadingRef.current = false;
+    requestAnimationFrame(() => {
+      const sentinel = sentinelRef.current;
+      if (sentinel && observerRef.current) {
+        observerRef.current.observe(sentinel);
+      }
+    });
+  }, [messages, hasMore, partner, accessToken, serverIP, protocol, highlightMessage]);
+
+  const uploadFiles = async (files: File[]): Promise<string[]> => {
+    if (files.length === 0) return [];
+    const formData = new FormData();
+    for (const file of files) formData.append('files', file);
+    const res = await fetch(`${protocol}://${serverIP}/upload`, {
+      method: 'POST',
+      headers: { "access-token": accessToken },
+      body: formData,
+    });
+    const data = await res.json();
+    return data.urls;
+  };
+
+  const sendMessage = useCallback(async () => {
+    if (!input.trim() && pendingFiles.length === 0) return;
+    if (!sharedKeyRef.current) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     try {
-      const { iv, ciphertext } = await encrypt(sharedKeyRef.current, text);
+      setUploading(true);
+      const attachments = await uploadFiles(pendingFiles);
+      setUploading(false);
+
+      const { iv, ciphertext } = await encrypt(sharedKeyRef.current, input);
       wsRef.current.send(JSON.stringify({
         type: "dm-message",
         recipient: partner,
         iv,
         ciphertext,
+        attachments,
+        replyToId: replyingTo?.__id || null,
       }));
       setInput("");
+      setPendingFiles([]);
+      setReplyingTo(null);
     } catch {
-      // Encryption or send failed — keep input so user can retry
+      setUploading(false);
     }
-    textareaRef.current?.focus();
-  }
+  }, [input, pendingFiles, partner, wsRef, replyingTo]);
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
+  const deleteMessage = (messageId: string) => {
+    if (!wsRef.current) return;
+    wsRef.current.send(JSON.stringify({ type: 'dm-delete-message', messageId }));
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) setPendingFiles((prev) => [...prev, ...files]);
+    e.target.value = "";
+  };
+
+  const removePendingFile = (index: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const partnerPhoto = profilePhotos[partner];
   const partnerPhotoUrl = partnerPhoto ? `${protocol}://${serverIP}${partnerPhoto}` : null;
 
-  // Loading skeletons
   if (initialLoading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center gap-2 p-4 border-b">
-          <Skeleton className="w-8 h-8 rounded-full" />
-          <Skeleton className="w-24 h-4" />
-        </div>
-        <div className="flex-1 p-4 space-y-4">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex gap-2">
-              <Skeleton className="w-8 h-8 rounded-full shrink-0" />
-              <div className="space-y-1">
-                <Skeleton className="w-20 h-3" />
-                <Skeleton className="w-48 h-4" />
-              </div>
-            </div>
-          ))}
+        <MessageHeader>
+          <Avatar username={partner} profilePhoto={partnerPhotoUrl} size="sm" />
+          {partner}
+        </MessageHeader>
+        <div className="flex-1 overflow-hidden flex flex-col justify-end">
+          <MessageSkeletons />
         </div>
       </div>
     );
@@ -221,14 +431,14 @@ export default function DirectMessage({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-2 p-4 border-b">
-        <Avatar username={partner} profilePhoto={partnerPhotoUrl} />
-        <span className="font-bold">{partner}</span>
-        <span className="ml-auto flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-full bg-green-500/15 text-green-500 shrink-0">
-          <ShieldCheck className="w-3.5 h-3.5" />
+      <MessageHeader>
+        <Avatar username={partner} profilePhoto={partnerPhotoUrl} size="sm" />
+        {partner}
+        <span className="ml-auto flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 text-green-500 shrink-0">
+          <ShieldCheck className="w-3 h-3" />
           E2E ENCRYPTED
         </span>
-      </div>
+      </MessageHeader>
 
       {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col-reverse">
@@ -237,46 +447,199 @@ export default function DirectMessage({
           {loadingMore && (
             <div className="text-center text-sm text-muted-foreground py-2">Loading older messages...</div>
           )}
-          {messages.map((msg) => {
+          {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+
+            const replyTarget = msg.replyToId
+              ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
+              : null;
+
             return (
-              <div key={msg.__id} className="flex gap-2 items-start">
-                <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <span className="font-bold">{msg.sender}</span>{" "}
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
-                  <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+            <ContextMenu key={msg.__id || i}>
+              <ContextMenuTrigger asChild>
+                <div data-msg-id={msg.__id} className={cn(
+                  "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700 cursor-pointer hover:bg-accent/50",
+                  highlightedMessageId === msg.__id && "bg-primary/15"
+                )}>
+                  <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    {/* Reply quote */}
+                    {msg.replyToId && (
+                      <div
+                        onClick={() => {
+                          if (replyTarget && replyTarget !== 'deleted') jumpToMessage(msg.replyToId!);
+                        }}
+                        className={cn(
+                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5",
+                          replyTarget && replyTarget !== 'deleted'
+                            ? "cursor-pointer hover:text-foreground transition-colors"
+                            : "cursor-default"
+                        )}
+                      >
+                        <CornerUpLeft className="w-3 h-3 shrink-0" />
+                        {replyTarget === 'deleted' ? (
+                          <span className="italic">Original message was deleted</span>
+                        ) : replyTarget ? (
+                          <>
+                            <span className="font-semibold">{replyTarget.sender}</span>
+                            <span className="truncate max-w-60">
+                              {replyTarget.text
+                                ? replyTarget.text.length > 60
+                                  ? replyTarget.text.slice(0, 60) + '...'
+                                  : replyTarget.text
+                                : 'Click to see attachment'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="italic">Loading...</span>
+                        )}
+                      </div>
+                    )}
+                    <span className="font-bold">{msg.sender}</span>{" "}
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </span>
+                    {msg.text && (
+                      <MessageContent
+                        text={msg.text}
+                        serverIP={serverIP}
+                        accessToken={accessToken}
+                        ogCache={ogCache}
+                      />
+                    )}
+                    {msg.attachments.length > 0 && (
+                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                    )}
+                  </div>
+                  <div className="flex gap-0.5 shrink-0 mt-1">
+                    <button
+                      onClick={() => startReply(msg)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      <Reply className="w-4 h-4" />
+                    </button>
+                    {msg.sender === username && (
+                      <button
+                        onClick={() => deleteMessage(msg.__id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem onSelect={() => startReply(msg)} className="cursor-pointer">
+                  <Reply className="w-4 h-4 mr-2" />
+                  Reply
+                </ContextMenuItem>
+                {msg.sender === username && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={() => deleteMessage(msg.__id)} className="cursor-pointer text-destructive focus:text-destructive">
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete
+                    </ContextMenuItem>
+                  </>
+                )}
+              </ContextMenuContent>
+            </ContextMenu>
             );
           })}
         </div>
+
+        {/* Jumping to message overlay */}
+        {jumpingToMessage && (
+          <div className="sticky bottom-2 flex justify-center pointer-events-none">
+            <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-sm shadow-lg">
+              <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              Jumping to message...
+            </div>
+          </div>
+        )}
+
+        {/* Jump to bottom button */}
+        {showJumpToBottom && !jumpingToMessage && (
+          <div className="sticky bottom-2 flex justify-center pointer-events-none">
+            <button
+              onClick={jumpToBottom}
+              className="pointer-events-auto flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-sm shadow-lg hover:bg-primary/90 transition-colors"
+            >
+              <ArrowDown className="w-4 h-4" />
+              Jump to bottom
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t">
-        <div className="flex items-end gap-2 bg-muted rounded-lg px-3 py-2">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`Message ${partner}`}
-            rows={1}
-            className="flex-1 bg-transparent resize-none outline-none text-sm max-h-32"
-          />
+      {/* Pending file previews */}
+      {pendingFiles.length > 0 && (
+        <div className="px-4 flex gap-2 flex-wrap">
+          {pendingFiles.map((file, i) => (
+            <div key={i} className="relative group">
+              {file.type.startsWith('image/') ? (
+                <img src={URL.createObjectURL(file)} alt={file.name} className="h-20 rounded border object-cover" />
+              ) : (
+                <div className="h-20 w-32 rounded border flex flex-col items-center justify-center gap-1 bg-muted px-2">
+                  <FileIcon className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground truncate w-full text-center">{file.name}</span>
+                </div>
+              )}
+              <button
+                onClick={() => removePendingFile(i)}
+                className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Reply preview bar */}
+      {replyingTo && (
+        <div className="px-4 pt-2 flex items-center gap-2 text-sm">
+          <div className="flex-1 min-w-0 border-l-2 border-primary pl-2 py-1">
+            <div className="text-xs text-muted-foreground">
+              Replying to <span className="font-semibold text-foreground">{replyingTo.sender}</span>
+            </div>
+            <div className="text-muted-foreground truncate text-xs">
+              {replyingTo.text
+                ? replyingTo.text.length > 100
+                  ? replyingTo.text.slice(0, 100) + '...'
+                  : replyingTo.text
+                : 'Attachment'}
+            </div>
+          </div>
           <button
-            onClick={sendMessage}
-            disabled={!input.trim()}
-            className="text-muted-foreground hover:text-foreground disabled:opacity-50 cursor-pointer"
+            onClick={() => setReplyingTo(null)}
+            className="text-muted-foreground hover:text-foreground transition-colors shrink-0 cursor-pointer"
           >
-            <SendHorizontal className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
-      </div>
+      )}
+
+      {/* Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileSelect}
+      />
+      <MessageInput
+        value={input}
+        onChange={setInput}
+        onSend={sendMessage}
+        placeholder={`Message ${partner}`}
+        canSend={(!!input.trim() || pendingFiles.length > 0) && !uploading}
+        onPaste={(files) => setPendingFiles((prev) => [...prev, ...files])}
+        onAttachClick={() => fileInputRef.current?.click()}
+        inputRef={textareaRef}
+      />
     </div>
   );
 }

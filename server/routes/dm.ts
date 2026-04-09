@@ -41,4 +41,15 @@ router.get("/dm/messages/:partner", (req: Request, res: Response) => {
   });
 });
 
+// Single DM message — for reply preview lookups (returns encrypted data)
+router.get("/dm/message/:messageId", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const messageId = req.params.messageId as string;
+  const dm = DirectMessages.get((m: any) => m.__id === messageId);
+  if (!dm) return res.sendStatus(404);
+  if (!dm.conversationId.split(':').includes(auth.username)) return res.sendStatus(404);
+  return res.status(200).json(dm);
+});
+
 export default router;

@@ -48,6 +48,8 @@ export type DirectMessage = {
   iv: string;
   ciphertext: string;
   timestamp: string;
+  attachments: string[];
+  replyToId: string | null;
   $id: string;
 };
 export const DirectMessages = db.createCollection<DirectMessage>("direct_messages");
@@ -71,6 +73,28 @@ export function upsertDmConversation(user: string, partner: string, timestamp: s
     );
   } else {
     DmConversations.create({ username: user, partner, lastTimestamp: timestamp });
+  }
+}
+
+export type LastRead = {
+  username: string;
+  targetId: string;
+  timestamp: string;
+  $id: string;
+};
+export const LastReads = db.createCollection<LastRead>("last_reads");
+
+export function upsertLastRead(username: string, targetId: string, timestamp: string) {
+  const existing = LastReads.get(
+    (r: any) => r.username === username && r.targetId === targetId
+  );
+  if (existing) {
+    LastReads.update(
+      (r) => { r.timestamp = timestamp; },
+      (r: any) => r.username === username && r.targetId === targetId,
+    );
+  } else {
+    LastReads.create({ username, targetId, timestamp });
   }
 }
 

@@ -12,6 +12,7 @@ import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
 import { getProtocol, getWsProtocol } from "~/lib/protocol";
 import useDmState from "~/hooks/useDmState";
+import useNotifications from "~/hooks/useNotifications";
 
 type Channel = {
   name: string;
@@ -64,6 +65,13 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   voicePeerSettingsRef.current = voicePeerSettings;
   const screenAudioPeerSettingsRef = useRef(screenAudioPeerSettings);
   screenAudioPeerSettingsRef.current = screenAudioPeerSettings;
+  const { unreadCounts, initUnreads, incrementUnread, clearUnread, notify } = useNotifications();
+  const selectedTextChannelIdRef = useRef(selectedTextChannelId);
+  selectedTextChannelIdRef.current = selectedTextChannelId;
+  const selectedDmPartnerRef = useRef(selectedDmPartner);
+  selectedDmPartnerRef.current = selectedDmPartner;
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
@@ -123,6 +131,12 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
     })
       .then((res) => res.json())
       .then((data) => setDmConversations(data.conversations || []));
+
+    fetch(`${protocol}://${serverIP}/unread-counts`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => initUnreads(data.unreads || {}));
 
     const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
     wsRef.current = ws;
@@ -267,8 +281,20 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
         setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
         if (msg.username === username) setMyRole(msg.role);
       }
+      if (msg.type === 'text-message' && msg.sender !== username) {
+        if (msg.channelId !== selectedTextChannelIdRef.current) {
+          incrementUnread(msg.channelId);
+          const ch = channelsRef.current.find((c) => c.__id === msg.channelId);
+          notify(`#${ch?.name ?? 'channel'}`, `${msg.sender}: ${msg.messageContent}`);
+        }
+      }
       if (msg.type === 'dm-message') {
         handleIncomingDm(msg);
+        const partner = msg.sender === username ? msg.recipient : msg.sender;
+        if (msg.sender !== username && partner !== selectedDmPartnerRef.current) {
+          incrementUnread(partner);
+          notify(`DM from ${msg.sender}`, 'New message');
+        }
       }
       if (msg.type === 'user-banned') {
         setAllUsers((prev) => prev.filter((u) => u !== msg.username));
@@ -445,12 +471,20 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const startDm = useCallback((partner: string) => {
     startDmRaw(partner);
     setSelectedTextChannelId(null);
-  }, [startDmRaw]);
+    clearUnread(partner);
+    fetch(`${protocol}://${serverIP}/read/${partner}`, {
+      method: 'PUT', headers: { 'access-token': accessToken },
+    });
+  }, [startDmRaw, protocol, serverIP, accessToken, clearUnread]);
 
   const selectTextChannel = useCallback((channelId: string) => {
     setSelectedTextChannelId(channelId);
     setSelectedDmPartner(null);
-  }, []);
+    clearUnread(channelId);
+    fetch(`${protocol}://${serverIP}/read/${channelId}`, {
+      method: 'PUT', headers: { 'access-token': accessToken },
+    });
+  }, [protocol, serverIP, accessToken, clearUnread]);
 
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
@@ -468,6 +502,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
         <ChannelSidebar
           channels={channels}
           selectedTextChannelId={selectedTextChannelId}
+          unreadCounts={unreadCounts}
           voiceChannelId={voiceChannelId}
           voicePeers={voicePeers}
           speakingUsers={speakingUsers}

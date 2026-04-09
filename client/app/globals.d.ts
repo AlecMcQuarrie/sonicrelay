@@ -8,6 +8,7 @@ interface ElectronAPI {
   installUpdate: (filePath: string) => Promise<void>;
   openReleasePage: (url: string) => Promise<void>;
   onDownloadProgress: (callback: (percent: number) => void) => () => void;
+  showNotification: (title: string, body: string) => Promise<void>;
 }
 
 interface Window {

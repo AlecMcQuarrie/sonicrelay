@@ -1,5 +1,6 @@
 import { Button } from "~/components/ui/button";
 import Avatar from "~/components/ui/avatar";
+import UnreadBadge from "~/components/ui/unread-badge";
 import { getProtocol } from "~/lib/protocol";
 
 interface DmConversationListProps {
@@ -8,6 +9,7 @@ interface DmConversationListProps {
   onSelectDm: (partner: string) => void;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
+  unreadCounts: Record<string, number>;
 }
 
 export default function DmConversationList({
@@ -16,6 +18,7 @@ export default function DmConversationList({
   onSelectDm,
   profilePhotos,
   serverIP,
+  unreadCounts,
 }: DmConversationListProps) {
   const protocol = getProtocol(serverIP);
 
@@ -40,6 +43,7 @@ export default function DmConversationList({
               >
                 <Avatar username={conv.partner} profilePhoto={photoUrl} size="sm" />
                 <span className="ml-1 truncate">{conv.partner}</span>
+                <UnreadBadge count={unreadCounts[conv.partner] || 0} />
               </Button>
             );
           })

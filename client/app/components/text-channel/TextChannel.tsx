@@ -1,96 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Paperclip, X, FileIcon, Trash2, SendHorizontal, ArrowDown, Reply, CornerUpLeft, MessageSquare } from "lucide-react";
+import { X, FileIcon, Trash2, ArrowDown, Reply, CornerUpLeft, MessageSquare } from "lucide-react";
+import MessageHeader from "~/components/ui/message-header";
+import MessageInput from "~/components/ui/message-input";
 import MessageAttachments from "./MessageAttachments";
 import MessageContent from "./MessageContent";
 import MessageSkeletons from "./MessageSkeletons";
 import Avatar from "~/components/ui/avatar";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
 import { cn } from "~/lib/utils";
-
-const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
-const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
-
-function getExt(url: string): string {
-  return url.substring(url.lastIndexOf('.')).toLowerCase();
-}
-
-export type OgData = {
-  title: string | null;
-  description: string | null;
-  image: string | null;
-  siteName: string | null;
-  url: string;
-};
-
-/** Preload an image URL. Resolves when loaded or errored. */
-function preloadImage(url: string): Promise<void> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve();
-    img.onerror = () => resolve();
-    img.src = url;
-  });
-}
-
-/** Preload all attachment images + link preview OG data (and their images). */
-async function preloadAllMedia(
-  messages: Message[],
-  protocol: string,
-  serverIP: string,
-  accessToken: string,
-): Promise<Map<string, OgData>> {
-  const ogCache = new Map<string, OgData>();
-  const imagePromises: Promise<void>[] = [];
-
-  // Collect attachment image URLs
-  for (const msg of messages) {
-    for (const att of msg.attachments || []) {
-      if (IMAGE_EXTS.includes(getExt(att))) {
-        imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}`));
-      }
-    }
-  }
-
-  // Collect all unique URLs from message text for link previews
-  const allUrls = new Set<string>();
-  for (const msg of messages) {
-    if (!msg.messageContent) continue;
-    const matches = msg.messageContent.match(URL_REGEX);
-    if (matches) matches.forEach((u) => allUrls.add(u));
-  }
-
-  // Fetch OG data for all URLs in parallel
-  const ogPromises = [...allUrls].map(async (url) => {
-    try {
-      const res = await fetch(
-        `${protocol}://${serverIP}/link-preview?url=${encodeURIComponent(url)}`,
-        { headers: { "access-token": accessToken } },
-      );
-      if (!res.ok) return;
-      const data: OgData = await res.json();
-      if (data.title || data.image) {
-        ogCache.set(url, data);
-        // Preload the OG image too
-        if (data.image) {
-          imagePromises.push(preloadImage(data.image));
-        }
-        // Preload YouTube thumbnail if applicable
-        const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-        if (ytMatch) {
-          imagePromises.push(preloadImage(`https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`));
-        }
-      }
-    } catch { /* skip failed previews */ }
-  });
-
-  // Wait for all OG fetches first (they may add images to preload)
-  await Promise.all(ogPromises);
-  // Then wait for all images (attachments + OG images)
-  await Promise.all(imagePromises);
-
-  return ogCache;
-}
+import { preloadAllMedia } from "~/lib/preload-media";
+import type { OgData } from "~/lib/preload-media";
 
 type Message = {
   __id?: string;
@@ -449,9 +369,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   return (
     <div className="flex flex-col h-full">
       {/* Channel header */}
-      <div className="p-4 border-b font-bold">
-        # {channelName}
-      </div>
+      <MessageHeader># {channelName}</MessageHeader>
 
       {/* Messages — column-reverse keeps viewport anchored to bottom */}
       {initialLoading ? (
@@ -652,60 +570,23 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       )}
 
       {/* Input */}
-      <div className="p-4">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-        <div className="flex items-center gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
-          <textarea
-            ref={textareaRef}
-            placeholder={`Message #${channelName}`}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              const el = textareaRef.current;
-              if (el) {
-                el.style.height = "auto";
-                const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 20;
-                el.style.height = Math.min(el.scrollHeight, lineHeight * 6) + "px";
-              }
-            }}
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files);
-              if (files.length > 0) {
-                e.preventDefault();
-                setPendingFiles((prev) => [...prev, ...files]);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !uploading) {
-                e.preventDefault();
-                sendMessage();
-                if (textareaRef.current) textareaRef.current.style.height = "auto";
-              }
-            }}
-            rows={1}
-            className="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none"
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1"
-          >
-            <Paperclip className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => { sendMessage(); if (textareaRef.current) textareaRef.current.style.height = "auto"; }}
-            disabled={(!input.trim() && pendingFiles.length === 0) || uploading}
-            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1 disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <SendHorizontal className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileSelect}
+      />
+      <MessageInput
+        value={input}
+        onChange={setInput}
+        onSend={sendMessage}
+        placeholder={`Message #${channelName}`}
+        canSend={(!!input.trim() || pendingFiles.length > 0) && !uploading}
+        onPaste={(files) => setPendingFiles((prev) => [...prev, ...files])}
+        onAttachClick={() => fileInputRef.current?.click()}
+        inputRef={textareaRef}
+      />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import channelRoutes from './routes/channels';
 import userRoutes from './routes/users';
 import dmRoutes from './routes/dm';
 import uploadRoutes from './routes/uploads';
+import readStatusRoutes from './routes/read-status';
 
 const jwt = require("jsonwebtoken");
 const cors = require('cors');
@@ -38,6 +39,7 @@ app.use(channelRoutes);
 app.use(userRoutes);
 app.use(dmRoutes);
 app.use(uploadRoutes);
+app.use(readStatusRoutes);
 
 // Server start
 const server = app.listen(port, async () => {
@@ -214,6 +216,9 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       const recipient = Users.get((u) => u.username === msg.recipient);
       if (!recipient || recipient.banned) return;
 
+      const attachments: string[] = Array.isArray(msg.attachments) ? msg.attachments.slice(0, 10) : [];
+      const replyToId = typeof msg.replyToId === 'string' ? msg.replyToId : null;
+
       const conversationId = [username, msg.recipient].sort().join(':');
       const timestamp = new Date().toISOString();
       const stored = DirectMessages.create({
@@ -222,6 +227,8 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         iv: msg.iv,
         ciphertext: msg.ciphertext,
         timestamp,
+        attachments,
+        replyToId,
       });
       upsertDmConversation(username, msg.recipient, timestamp);
       upsertDmConversation(msg.recipient, username, timestamp);
@@ -234,11 +241,34 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         iv: msg.iv,
         ciphertext: msg.ciphertext,
         timestamp,
+        attachments,
+        replyToId,
       };
       ws.send(JSON.stringify(outgoing));
       for (const [clientWs, client] of clients) {
         if (client.username === msg.recipient && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify(outgoing));
+        }
+      }
+      return;
+    }
+
+    // ── Delete direct message ──
+    if (msg.type === 'dm-delete-message') {
+      const dm = DirectMessages.get((m: any) => m.__id === msg.messageId);
+      if (!dm || dm.sender !== username) return;
+      for (const url of dm.attachments || []) {
+        const filePath = path.join(__dirname, url);
+        fs.unlink(filePath, () => {});
+      }
+      DirectMessages.remove((m: any) => m.__id === msg.messageId);
+      const parts = dm.conversationId.split(':');
+      const partner = parts[0] === username ? parts[1] : parts[0];
+      const deletion = JSON.stringify({ type: 'dm-delete-message', messageId: msg.messageId });
+      ws.send(deletion);
+      for (const [clientWs, client] of clients) {
+        if (client.username === partner && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(deletion);
         }
       }
       return;

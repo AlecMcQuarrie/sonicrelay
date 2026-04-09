@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
-import type { OgData } from "./TextChannel";
+import type { OgData } from "~/lib/preload-media";
 
 interface LinkPreviewProps {
   url: string;

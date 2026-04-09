@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, protocol, net, desktopCapturer, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, session, protocol, net, desktopCapturer, ipcMain, shell, Notification } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
@@ -286,6 +286,10 @@ app.on('ready', () => {
 
   ipcMain.handle('open-release-page', async (_event, url: string) => {
     shell.openExternal(url);
+  });
+
+  ipcMain.handle('show-notification', (_event, title: string, body: string) => {
+    new Notification({ title, body }).show();
   });
 
   createWindow();

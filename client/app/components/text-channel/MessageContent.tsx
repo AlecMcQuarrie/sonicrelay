@@ -1,5 +1,5 @@
 import LinkPreview from "./LinkPreview";
-import type { OgData } from "./TextChannel";
+import type { OgData } from "~/lib/preload-media";
 
 const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
 

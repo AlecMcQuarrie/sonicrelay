@@ -5,6 +5,7 @@ import PeerVolumeMenu from "./PeerVolumeMenu";
 import ScreenAudioControls from "./ScreenAudioControls";
 import CreateChannelDialog from "./CreateChannelDialog";
 import DmConversationList from "~/components/dm/DmConversationList";
+import UnreadBadge from "~/components/ui/unread-badge";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -38,6 +39,7 @@ interface ChannelSidebarProps {
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
   screenAudioPeerSettings: Record<string, VoicePeerSetting>;
+  unreadCounts: Record<string, number>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
   onFocusVideo: (key: string) => void;
@@ -158,6 +160,7 @@ function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () =>
 export default function ChannelSidebar({
   channels,
   selectedTextChannelId,
+  unreadCounts,
   voiceChannelId,
   voicePeers,
   speakingUsers,
@@ -217,6 +220,7 @@ export default function ChannelSidebar({
           >
             <Hash className="w-4 h-4 mr-1" />
             {channel.name}
+            <UnreadBadge count={unreadCounts[channel.__id] || 0} />
           </Button>
         ))}
       </div>
@@ -276,6 +280,7 @@ export default function ChannelSidebar({
         onSelectDm={onSelectDm}
         profilePhotos={profilePhotos}
         serverIP={serverIP}
+        unreadCounts={unreadCounts}
       />
 
       <CreateChannelDialog

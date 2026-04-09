@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-download-progress', handler);
     return () => { ipcRenderer.removeListener('update-download-progress', handler); };
   },
+  showNotification: (title: string, body: string) => ipcRenderer.invoke('show-notification', title, body),
 });
