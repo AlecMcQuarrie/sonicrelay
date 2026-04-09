@@ -35,8 +35,13 @@ export default function Home() {
     const data = localStorage.getItem("connectionData");
 
     if (data) {
-      // If there is connection data, set the data to an existing session
       const parsedData = JSON.parse(data);
+      // Force re-login if account is missing encryption keys
+      if (!parsedData.encryptedPrivateKey || !parsedData.pbkdfSalt) {
+        localStorage.removeItem("connectionData");
+        setIsNewSession(true);
+        return;
+      }
       setConnectionData(parsedData);
       setIsNewSession(false);
     } else {
@@ -74,11 +79,38 @@ export default function Home() {
     const data = await response.json();
 
     // On login, unwrap the private key from the server response
+    // If the account has no encryption keys (created before E2E), generate and upload them
     let unlockedPrivateKey: CryptoKey | null = generatedPrivateKey;
-    if (!isRegistration && data.encryptedPrivateKey && data.pbkdfSalt) {
-      const salt = new Uint8Array(base64ToArrayBuffer(data.pbkdfSalt));
-      const wrappingKey = await deriveWrappingKey(password, salt);
-      unlockedPrivateKey = await unwrapPrivateKey(data.encryptedPrivateKey, wrappingKey);
+    let finalEncryptedPrivateKey = isRegistration ? body.encryptedPrivateKey : data.encryptedPrivateKey;
+    let finalPbkdfSalt = isRegistration ? body.pbkdfSalt : data.pbkdfSalt;
+
+    if (!isRegistration) {
+      if (data.encryptedPrivateKey && data.pbkdfSalt) {
+        const salt = new Uint8Array(base64ToArrayBuffer(data.pbkdfSalt));
+        const wrappingKey = await deriveWrappingKey(password, salt);
+        unlockedPrivateKey = await unwrapPrivateKey(data.encryptedPrivateKey, wrappingKey);
+      } else {
+        // Existing account without keys — generate and upload
+        const keyPair = await generateKeyPair();
+        const publicKeyBase64 = await exportPublicKey(keyPair.publicKey);
+        const salt = generateSalt();
+        const wrappingKey = await deriveWrappingKey(password, salt);
+        const wrappedPrivateKey = await wrapPrivateKey(keyPair.privateKey, wrappingKey);
+        finalEncryptedPrivateKey = wrappedPrivateKey;
+        finalPbkdfSalt = arrayBufferToBase64(salt.buffer as ArrayBuffer);
+        unlockedPrivateKey = keyPair.privateKey;
+
+        // Upload keys to server
+        await fetch(`${protocol}://${serverIP}/me/encryption-keys`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'access-token': data.accessToken },
+          body: JSON.stringify({
+            publicKey: publicKeyBase64,
+            encryptedPrivateKey: finalEncryptedPrivateKey,
+            pbkdfSalt: finalPbkdfSalt,
+          }),
+        });
+      }
     }
     setPrivateKey(unlockedPrivateKey);
 
@@ -86,8 +118,8 @@ export default function Home() {
       serverIP,
       username,
       accessToken: data.accessToken,
-      encryptedPrivateKey: isRegistration ? body.encryptedPrivateKey : data.encryptedPrivateKey,
-      pbkdfSalt: isRegistration ? body.pbkdfSalt : data.pbkdfSalt,
+      encryptedPrivateKey: finalEncryptedPrivateKey,
+      pbkdfSalt: finalPbkdfSalt,
     };
     localStorage.setItem("connectionData", JSON.stringify(formattedConnectionData));
     setConnectionData(formattedConnectionData);

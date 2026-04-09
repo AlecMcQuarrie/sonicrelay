@@ -226,6 +226,20 @@ app.put("/me/voice-peer-settings", (req: Request, res: Response) => {
   return res.status(200).json({ voicePeerSettings: settings });
 });
 
+// Encryption key upload — for existing accounts that don't have keys yet
+app.put("/me/encryption-keys", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const { publicKey, encryptedPrivateKey, pbkdfSalt } = req.body;
+  if (!publicKey || !encryptedPrivateKey || !pbkdfSalt) return res.sendStatus(400);
+  Users.update((u) => {
+    (u as any).publicKey = publicKey;
+    (u as any).encryptedPrivateKey = encryptedPrivateKey;
+    (u as any).pbkdfSalt = pbkdfSalt;
+  }, (u) => u.username === auth.username);
+  return res.sendStatus(200);
+});
+
 // Screen audio peer settings endpoints
 app.get("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
   const auth = authenticate(req);
