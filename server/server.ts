@@ -1,120 +1,43 @@
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-
-import express, { Request, Response } from "express";
-import { Database } from "simpl.db";
+import express from "express";
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import "dotenv/config";
-import * as voice from './voice';
-import multer from 'multer';
 import path from 'path';
-import crypto from 'crypto';
 import fs from 'fs';
+import * as voice from './voice';
+import { Users, Messages, DirectMessages, upsertDmConversation } from './db';
+import { clients, broadcastToAll, broadcastToVoiceChannel, broadcastPresence, getVoicePeers, getMutedUsers, getDeafenedUsers } from './clients';
+import authRoutes from './routes/auth';
+import channelRoutes from './routes/channels';
+import userRoutes from './routes/users';
+import dmRoutes from './routes/dm';
+import uploadRoutes from './routes/uploads';
+
+const jwt = require("jsonwebtoken");
+const cors = require('cors');
 
 type RipV2IncomingMessage = IncomingMessage & {
   username?: string;
-}
+};
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-const db = new Database();
-
-type VoicePeerSetting = {
-  volume: number;
-  muted: boolean;
-};
-
-type Role = 'superadmin' | 'admin' | 'member';
-
-type User = {
-  username: string;
-  password: string;
-  profilePhoto: string | null;
-  voicePeerSettings: Record<string, VoicePeerSetting> | null;
-  screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
-  role: Role;
-  banned: boolean;
-  publicKey: string | null;
-  encryptedPrivateKey: string | null;
-  pbkdfSalt: string | null;
-  $id: string;
-};
-const Users = db.createCollection<User>("users");
-
-// Look up caller's identity and role from access-token header.
-// Role and banned status are read fresh from the DB on every request
-// so promotions/demotions/bans take effect without re-issuing tokens.
-function authenticate(req: Request): { username: string; role: Role } | null {
-  const token = req.headers["access-token"] as string | undefined;
-  if (!token) return null;
-  try {
-    const { username } = jwt.verify(token, process.env.ENCRYPTION_KEY);
-    if (!username) return null;
-    const user = Users.get((u) => u.username === username);
-    if (!user || user.banned) return null;
-    return { username, role: user.role || 'member' };
-  } catch {
-    return null;
-  }
-}
-
-type Channel = {
-  name: string;
-  type: "text" | "voice";
-  $id: string;
-};
-const Channels = db.createCollection<Channel>("channels");
-
-type Message = {
-  channelId: string;
-  messageContent: string;
-  sender: string;
-  timestamp: string;
-  attachments: string[];
-  replyToId: string | null;
-  $id: string;
-};
-const Messages = db.createCollection<Message>("messages");
-
-type DirectMessage = {
-  conversationId: string;
-  sender: string;
-  iv: string;
-  ciphertext: string;
-  timestamp: string;
-  $id: string;
-};
-const DirectMessages = db.createCollection<DirectMessage>("direct_messages");
-
-// Seed default channels if none exist
-if (Channels.getAll().length === 0) {
-  Channels.create({ name: "general", type: "text" });
-  Channels.create({ name: "General", type: "voice" });
-}
-
-const cors = require('cors');
+// Middleware
 app.use(cors({ origin: true }));
-
-// parse application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true }));
-
-// parse application/json
 app.use(express.json());
-
-// Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// File upload via multer
-const storage = multer.diskStorage({
-  destination: path.join(__dirname, 'uploads'),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, crypto.randomUUID() + ext);
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+// Health check
+app.get("/health", (_req, res) => res.send("RipV2 server running"));
+
+// Routes
+app.use(authRoutes);
+app.use(channelRoutes);
+app.use(userRoutes);
+app.use(dmRoutes);
+app.use(uploadRoutes);
 
 // Server start
 const server = app.listen(port, async () => {
@@ -122,457 +45,34 @@ const server = app.listen(port, async () => {
   console.log(`RipV2 server started at http://localhost:${port}`);
 });
 
-// Health check
-app.get("/health", (_req: Request, res: Response) => {
-  return res.send("RipV2 server running");
-});
-
-app.post("/signup", async (req: Request, res: Response) => {
-  // If username already exists
-  if (Users.get((x) => x.username === req.body.username)) {
-    return res.sendStatus(500);
-  }
-
-  // Create user and hash password
-  const password = await bcrypt.hash(req.body.password, +(process.env.SALT || 12));
-
-  const user = {
-    username: req.body.username,
-    password: password,
-    profilePhoto: null,
-    voicePeerSettings: null,
-    screenAudioPeerSettings: null,
-    role: 'member' as Role,
-    banned: false,
-    publicKey: req.body.publicKey || null,
-    encryptedPrivateKey: req.body.encryptedPrivateKey || null,
-    pbkdfSalt: req.body.pbkdfSalt || null,
-  };
-  Users.create(user);
-
-  const token = jwt.sign(
-    { username: user.username },
-    process.env.ENCRYPTION_KEY,
-  );
-  return res.status(200).json({ accessToken: token });
-});
-
-app.post("/login", async (req: Request, res: Response) => {
-  const user = Users.get((x) => x.username === req.body.username);
-  // If username already exists
-  if (!user) {
-    return res.sendStatus(404);
-  }
-
-  // Create user and hash password
-  const compare = await bcrypt.compare(req.body.password, user.password);
-
-  if (compare) {
-    if (user.banned) return res.sendStatus(403);
-    const token = jwt.sign(
-      { username: user.username },
-      process.env.ENCRYPTION_KEY,
-    );
-    return res.status(200).json({
-      accessToken: token,
-      encryptedPrivateKey: (user as any).encryptedPrivateKey || null,
-      pbkdfSalt: (user as any).pbkdfSalt || null,
-    });
-  }
-
-  // Send 200 if successful
-  return res.sendStatus(401);
-});
-
-app.post("/me", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const user = Users.get((u) => u.username === auth.username);
-  return res.status(200).json({
-    username: auth.username,
-    profilePhoto: user?.profilePhoto || null,
-    role: auth.role,
-  });
-});
-
-app.put("/me/profile-photo", upload.single('file'), (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const file = req.file as Express.Multer.File;
-  if (!file) return res.sendStatus(400);
-  const url = `/uploads/${file.filename}`;
-  Users.update((u) => { u.profilePhoto = url; }, (u) => u.username === auth.username);
-  return res.status(200).json({ profilePhoto: url });
-});
-
-// Voice peer settings endpoints
-app.get("/me/voice-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const user = Users.get((u) => u.username === auth.username);
-  return res.status(200).json({ voicePeerSettings: user?.voicePeerSettings || {} });
-});
-
-app.put("/me/voice-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const { peerUsername, volume, muted } = req.body;
-  if (!peerUsername) return res.sendStatus(400);
-  const user = Users.get((u) => u.username === auth.username);
-  if (!user) return res.sendStatus(404);
-  const settings = (user as any).voicePeerSettings || {};
-  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
-  Users.update((u) => { (u as any).voicePeerSettings = settings; }, (u) => u.username === auth.username);
-  return res.status(200).json({ voicePeerSettings: settings });
-});
-
-// Encryption key upload — for existing accounts that don't have keys yet
-app.put("/me/encryption-keys", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const { publicKey, encryptedPrivateKey, pbkdfSalt } = req.body;
-  if (!publicKey || !encryptedPrivateKey || !pbkdfSalt) return res.sendStatus(400);
-  Users.update((u) => {
-    (u as any).publicKey = publicKey;
-    (u as any).encryptedPrivateKey = encryptedPrivateKey;
-    (u as any).pbkdfSalt = pbkdfSalt;
-  }, (u) => u.username === auth.username);
-  return res.sendStatus(200);
-});
-
-// Screen audio peer settings endpoints
-app.get("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const user = Users.get((u) => u.username === auth.username);
-  return res.status(200).json({ screenAudioPeerSettings: user?.screenAudioPeerSettings || {} });
-});
-
-app.put("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const { peerUsername, volume, muted } = req.body;
-  if (!peerUsername) return res.sendStatus(400);
-  const user = Users.get((u) => u.username === auth.username);
-  if (!user) return res.sendStatus(404);
-  const settings = (user as any).screenAudioPeerSettings || {};
-  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
-  Users.update((u) => { (u as any).screenAudioPeerSettings = settings; }, (u) => u.username === auth.username);
-  return res.status(200).json({ screenAudioPeerSettings: settings });
-});
-
-// Channel endpoints
-app.get("/channels", (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  return res.status(200).json({ channels: Channels.getAll() });
-});
-
-app.post("/channels", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
-  const { name, type } = req.body;
-  if (!name?.trim() || !['text', 'voice'].includes(type)) {
-    return res.status(400).json({ error: "Name and type (text/voice) are required" });
-  }
-  const channel = Channels.create({ name: name.trim(), type });
-  return res.status(200).json({ channel });
-});
-
-// Users endpoint — excludes banned users from the list
-app.get("/users", (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  const users = Users.getAll()
-    .filter((u) => !u.banned)
-    .map((u) => ({
-      username: u.username,
-      profilePhoto: u.profilePhoto || null,
-      role: (u.role || 'member') as Role,
-      publicKey: (u as any).publicKey || null,
-    }));
-  return res.status(200).json({ users });
-});
-
-// Admin/superadmin: promote or demote a user
-app.put("/users/:username/role", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
-  const role = req.body.role as Role;
-  if (role !== 'admin' && role !== 'member') return res.sendStatus(400); // can't assign superadmin via API
-  const target = Users.get((u) => u.username === req.params.username);
-  if (!target) return res.sendStatus(404);
-  const targetRole = target.role || 'member';
-  // Nobody can modify a superadmin
-  if (targetRole === 'superadmin') return res.sendStatus(403);
-  // Prevent self-demotion (lockout guard)
-  if (target.username === auth.username) return res.sendStatus(400);
-  // Regular admins can only promote members, not demote other admins
-  if (auth.role === 'admin' && targetRole === 'admin') return res.sendStatus(403);
-  Users.update((u) => { u.role = role; }, (u) => u.username === req.params.username);
-  broadcastToAll({ type: 'role-changed', username: req.params.username, role });
-  return res.sendStatus(200);
-});
-
-// Admin/superadmin: ban a user (soft delete). Closes their WS and blocks future login.
-app.post("/users/:username/ban", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
-  const target = Users.get((u) => u.username === req.params.username);
-  if (!target) return res.sendStatus(404);
-  const targetRole = target.role || 'member';
-  // Nobody can ban a superadmin
-  if (targetRole === 'superadmin') return res.sendStatus(403);
-  // Regular admins can't ban other admins — only superadmins can
-  if (auth.role === 'admin' && targetRole === 'admin') return res.sendStatus(403);
-  if (target.username === auth.username) return res.sendStatus(400);
-  Users.update((u) => { u.banned = true; }, (u) => u.username === req.params.username);
-  // Close any active connections for the banned user
-  for (const [ws, client] of clients) {
-    if (client.username === target.username) ws.close(4003, 'banned');
-  }
-  broadcastToAll({ type: 'user-banned', username: target.username });
-  return res.sendStatus(200);
-});
-
-// Upload endpoint
-app.post("/upload", upload.array('files', 10), (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  const files = req.files as Express.Multer.File[];
-  const urls = files.map((f) => `/uploads/${f.filename}`);
-  return res.status(200).json({ urls });
-});
-
-// Link preview endpoint — fetches Open Graph metadata from a URL
-app.get("/link-preview", async (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-
-  const url = req.query.url as string;
-  if (!url) return res.sendStatus(400);
-
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "bot" },
-      signal: AbortSignal.timeout(5000),
-      redirect: "follow",
-    });
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text/html")) {
-      return res.status(200).json({ title: null, description: null, image: null, siteName: null, url });
-    }
-
-    const html = await response.text();
-
-    const getTag = (property: string): string | null => {
-      const match = html.match(new RegExp(`<meta[^>]*(?:property|name)=["']${property}["'][^>]*content=["']([^"']*)["']`, 'i'))
-        || html.match(new RegExp(`<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["']${property}["']`, 'i'));
-      return match ? match[1] : null;
-    };
-
-    // Fallback title from <title> tag
-    const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-
-    const data = {
-      title: getTag("og:title") || getTag("twitter:title") || (titleTag ? titleTag[1].trim() : null),
-      description: getTag("og:description") || getTag("twitter:description") || getTag("description"),
-      image: getTag("og:image") || getTag("twitter:image"),
-      siteName: getTag("og:site_name"),
-      url,
-    };
-
-    return res.status(200).json(data);
-  } catch {
-    return res.status(200).json({ title: null, description: null, image: null, siteName: null, url });
-  }
-});
-
-// Message endpoint (paginated, cursor-based)
-app.get("/channels/:channelId/messages", (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-  const before = req.query.before as string | undefined;
-
-  let all = Messages.getAll()
-    .filter((m: any) => m.channelId === req.params.channelId)
-    .sort((a: any, b: any) => (b as any).timestamp.localeCompare((a as any).timestamp)); // newest first
-
-  if (before) {
-    const idx = all.findIndex((m: any) => (m as any).__id === before);
-    if (idx !== -1) all = all.slice(idx + 1);
-  }
-
-  const page = all.slice(0, limit);
-  return res.status(200).json({
-    messages: page.reverse(), // return oldest→newest for display
-    hasMore: all.length > limit,
-  });
-});
-
-// Single message endpoint (for reply preview lookups)
-app.get("/messages/:messageId", (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  const message = Messages.get((m: any) => m.__id === req.params.messageId);
-  if (!message) return res.sendStatus(404);
-  return res.status(200).json(message);
-});
-
-// DM conversations — list distinct conversation partners for the current user
-app.get("/dm/conversations", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-
-  const allDms = DirectMessages.getAll() as any[];
-  const convMap = new Map<string, string>(); // partner -> lastTimestamp
-
-  for (const dm of allDms) {
-    const parts = dm.conversationId.split(':');
-    if (parts.length !== 2) continue;
-    const [userA, userB] = parts;
-    let partner: string;
-    if (userA === auth.username) partner = userB;
-    else if (userB === auth.username) partner = userA;
-    else continue;
-
-    const existing = convMap.get(partner);
-    if (!existing || dm.timestamp > existing) {
-      convMap.set(partner, dm.timestamp);
-    }
-  }
-
-  const conversations = Array.from(convMap.entries())
-    .map(([partner, lastTimestamp]) => ({ partner, lastTimestamp }))
-    .sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp));
-
-  return res.status(200).json({ conversations });
-});
-
-// DM messages — paginated encrypted messages between current user and :partner
-app.get("/dm/messages/:partner", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const conversationId = [auth.username, req.params.partner].sort().join(':');
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-  const before = req.query.before as string | undefined;
-
-  let all = DirectMessages.getAll()
-    .filter((m: any) => m.conversationId === conversationId)
-    .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp)); // newest first
-
-  if (before) {
-    const idx = all.findIndex((m: any) => (m as any).__id === before);
-    if (idx !== -1) all = all.slice(idx + 1);
-  }
-
-  const page = all.slice(0, limit);
-  return res.status(200).json({
-    messages: page.reverse(), // return oldest→newest for display
-    hasMore: all.length > limit,
-  });
-});
-
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 
-// Track connected clients
-type ConnectedClient = {
-  username: string;
-  voiceChannelId: string | null;
-  isMuted: boolean;
-  isDeafened: boolean;
-};
-const clients = new Map<WebSocket, ConnectedClient>();
-
-// Get current voice peers across all channels
-function getVoicePeers(): Record<string, string[]> {
-  const peers: Record<string, string[]> = {};
-  for (const client of clients.values()) {
-    if (client.voiceChannelId) {
-      if (!peers[client.voiceChannelId]) peers[client.voiceChannelId] = [];
-      peers[client.voiceChannelId].push(client.username);
-    }
-  }
-  return peers;
-}
-
-// Get self-muted usernames across all voice channels
-function getMutedUsers(): string[] {
-  const muted: string[] = [];
-  for (const client of clients.values()) {
-    if (client.voiceChannelId && client.isMuted) {
-      muted.push(client.username);
-    }
-  }
-  return muted;
-}
-
-// Get self-deafened usernames across all voice channels
-function getDeafenedUsers(): string[] {
-  const deafened: string[] = [];
-  for (const client of clients.values()) {
-    if (client.voiceChannelId && client.isDeafened) {
-      deafened.push(client.username);
-    }
-  }
-  return deafened;
-}
-
-// Get unique online usernames
-function getOnlineUsernames(): string[] {
-  const names = new Set<string>();
-  for (const client of clients.values()) {
-    names.add(client.username);
-  }
-  return [...names];
-}
-
-// Broadcast current online users to all clients
-function broadcastPresence() {
-  broadcastToAll({ type: 'presence', onlineUsers: getOnlineUsernames() });
-}
-
-// Broadcast to all connected clients
-function broadcastToAll(message: object) {
-  const data = JSON.stringify(message);
-  for (const [ws] of clients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(data);
-  }
-}
-
-// Broadcast to peers in a specific voice channel (excluding one client)
-function broadcastToVoiceChannel(channelId: string, message: object, excludeWs?: WebSocket) {
-  const data = JSON.stringify(message);
-  for (const [ws, client] of clients) {
-    if (client.voiceChannelId === channelId && ws !== excludeWs && ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
-    }
-  }
-}
-
-// WebSocket server with JWT auth
 const wss = new WebSocketServer({
   server, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
-    const url = new URL(info.req.url || "", `http://${info.req.headers.host}`);
-    const accessToken = info.req.headers["access-token"] || url.searchParams.get("token");
-    const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
-    if (username) {
-      const user = Users.get((u) => u.username === username);
-      if (!user || user.banned) {
-        authenticate(false, 403);
+    try {
+      const url = new URL(info.req.url || "", `http://${info.req.headers.host}`);
+      const accessToken = info.req.headers["access-token"] || url.searchParams.get("token");
+      const { username } = jwt.verify(accessToken, process.env.ENCRYPTION_KEY);
+      if (username) {
+        const user = Users.get((u) => u.username === username);
+        if (!user || user.banned) {
+          authenticate(false, 403);
+          return;
+        }
+        info.req.username = username;
+        authenticate(true);
         return;
       }
-      info.req.username = username;
-      authenticate(true);
-      return;
+    } catch (err) {
+      console.warn('WebSocket auth failed:', (err as Error).message);
     }
     authenticate(false, 401);
-    return;
   }
 });
 
 // Ping measurement: track round-trip time per client
-const clientPings = new Map<WebSocket, number>(); // ws -> latency in ms
+const clientPings = new Map<WebSocket, number>();
 
-// Build a username -> ping map for all voice-connected users
 function getVoicePings(): Record<string, number> {
   const pings: Record<string, number> = {};
   for (const [ws, client] of clients) {
@@ -587,7 +87,7 @@ function getVoicePings(): Record<string, number> {
 // Ping all clients every 5 seconds, measure latency, broadcast to voice peers
 const PING_INTERVAL = 5000;
 const pingInterval = setInterval(() => {
-  for (const [ws, client] of clients) {
+  for (const [ws] of clients) {
     if ((ws as any).isAlive === false) {
       ws.terminate();
       continue;
@@ -597,7 +97,6 @@ const pingInterval = setInterval(() => {
     ws.ping();
   }
 
-  // Broadcast current pings to everyone in voice
   const pings = getVoicePings();
   if (Object.keys(pings).length > 0) {
     broadcastToAll({ type: 'voice-pings', pings });
@@ -645,7 +144,13 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
   // Handle incoming messages
   ws.on('message', async (data) => {
-    const msg = JSON.parse(data.toString());
+    let msg: any;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch (err) {
+      console.warn('Malformed WebSocket message from', username, (err as Error).message);
+      return;
+    }
 
     // ── Text message ──
     if (msg.type === 'text-message') {
@@ -670,7 +175,6 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         sender: username,
         replyToId,
       };
-      // Echo back to sender so they get the __id
       ws.send(JSON.stringify(message));
       for (const [client] of clients) {
         if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -686,7 +190,6 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
       const actor = Users.get((u) => u.username === username);
       const isAdmin = actor?.role === 'admin' || actor?.role === 'superadmin';
       if (!message || (message.sender !== username && !isAdmin)) return;
-      // Delete attachment files from disk
       for (const url of message.attachments || []) {
         const filePath = path.join(__dirname, url);
         fs.unlink(filePath, () => {});
@@ -702,14 +205,12 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
     // ── Direct message (E2E encrypted) ──
     if (msg.type === 'dm-message') {
-      // Validate required fields
       if (!msg.recipient || typeof msg.recipient !== 'string') return;
       if (!msg.iv || typeof msg.iv !== 'string') return;
       if (!msg.ciphertext || typeof msg.ciphertext !== 'string') return;
       if (msg.iv.length > 100 || msg.ciphertext.length > 100_000) return;
-      if (msg.recipient === username) return; // Can't DM yourself
+      if (msg.recipient === username) return;
 
-      // Validate recipient exists and isn't banned
       const recipient = Users.get((u) => u.username === msg.recipient);
       if (!recipient || recipient.banned) return;
 
@@ -722,6 +223,8 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         ciphertext: msg.ciphertext,
         timestamp,
       });
+      upsertDmConversation(username, msg.recipient, timestamp);
+      upsertDmConversation(msg.recipient, username, timestamp);
       const outgoing = {
         type: 'dm-message',
         __id: (stored as any).__id,
@@ -732,9 +235,7 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
         ciphertext: msg.ciphertext,
         timestamp,
       };
-      // Echo to sender
       ws.send(JSON.stringify(outgoing));
-      // Send to recipient if online
       for (const [clientWs, client] of clients) {
         if (client.username === msg.recipient && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify(outgoing));

@@ -7,8 +7,11 @@ import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { ShieldAlert } from "lucide-react";
+import UpdateBanner from "~/components/update-banner/UpdateBanner";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
+import { getProtocol, getWsProtocol } from "~/lib/protocol";
+import useDmState from "~/hooks/useDmState";
 
 type Channel = {
   name: string;
@@ -49,9 +52,12 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
-  const [selectedDmPartner, setSelectedDmPartner] = useState<string | null>(null);
-  const [dmConversations, setDmConversations] = useState<{ partner: string; lastTimestamp: string }[]>([]);
-  const [publicKeys, setPublicKeys] = useState<Record<string, string>>({});
+  const {
+    selectedDmPartner, setSelectedDmPartner,
+    dmConversations, setDmConversations,
+    publicKeys, setPublicKeys,
+    startDm: startDmRaw, handleIncomingDm,
+  } = useDmState(username, privateKey);
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
@@ -61,8 +67,8 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
-    const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
-    const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
+    const protocol = getProtocol(serverIP);
+    const wsProtocol = getWsProtocol(serverIP);
 
     fetch(`${protocol}://${serverIP}/channels`, {
       headers: { "access-token": accessToken },
@@ -262,12 +268,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
         if (msg.username === username) setMyRole(msg.role);
       }
       if (msg.type === 'dm-message') {
-        // Update DM conversation list when a new DM arrives
-        const partner = msg.sender === username ? msg.recipient : msg.sender;
-        setDmConversations((prev) => {
-          const filtered = prev.filter((c) => c.partner !== partner);
-          return [{ partner, lastTimestamp: msg.timestamp }, ...filtered];
-        });
+        handleIncomingDm(msg);
       }
       if (msg.type === 'user-banned') {
         setAllUsers((prev) => prev.filter((u) => u !== msg.username));
@@ -360,7 +361,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
     await voiceRef.current?.stopScreenShare();
   }, []);
 
-  const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+  const protocol = getProtocol(serverIP);
 
   const saveVoicePeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
     fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
@@ -442,16 +443,9 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   }, [protocol, serverIP, accessToken]);
 
   const startDm = useCallback((partner: string) => {
-    if (partner === username) return;
-    if (!privateKey) return;
-    setSelectedDmPartner(partner);
+    startDmRaw(partner);
     setSelectedTextChannelId(null);
-    // Add to conversation list if not already present
-    setDmConversations((prev) => {
-      if (prev.some((c) => c.partner === partner)) return prev;
-      return [{ partner, lastTimestamp: new Date().toISOString() }, ...prev];
-    });
-  }, [username, privateKey]);
+  }, [startDmRaw]);
 
   const selectTextChannel = useCallback((channelId: string) => {
     setSelectedTextChannelId(channelId);
@@ -462,8 +456,10 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
   return (
-    <div className="flex h-screen">
-      <div className="w-60 border-r flex flex-col h-screen">
+    <div className="flex flex-col h-screen">
+      <UpdateBanner />
+      <div className="flex flex-1 min-h-0">
+      <div className="w-60 border-r flex flex-col h-full">
         <div className="px-4 py-1 border-b font-bold text-center">
           <span className="text-[32px]">[</span>
           <span className="relative -top-[2px] px-1 text-2xl">SONICRELAY</span>
@@ -605,6 +601,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
           onSetRole={setUserRole}
           onStartDm={startDm}
         />
+      </div>
       </div>
     </div>
   );

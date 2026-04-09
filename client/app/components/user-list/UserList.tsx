@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Users } from "lucide-react";
 import UserRow from "./UserRow";
 import BanDialog from "./BanDialog";
+import { getProtocol } from "~/lib/protocol";
 
 type Role = 'superadmin' | 'admin' | 'member';
 
@@ -22,7 +23,7 @@ export default function UserList({
   users, onlineUsers, profilePhotos, serverIP,
   myUsername, myRole, userRoles, onBan, onSetRole, onStartDm,
 }: UserListProps) {
-  const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+  const protocol = getProtocol(serverIP);
   const [banTarget, setBanTarget] = useState<string | null>(null);
 
   const sorted = [...users].sort((a, b) => {

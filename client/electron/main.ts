@@ -1,7 +1,99 @@
-import { app, BrowserWindow, session, protocol, net, desktopCapturer, ipcMain } from 'electron';
+import { app, BrowserWindow, session, protocol, net, desktopCapturer, ipcMain, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import https from 'https';
 import { pathToFileURL } from 'url';
+
+// --- Auto-update (DIY via GitHub Releases) ---
+
+const GITHUB_OWNER = 'AlecMcQuarrie';
+const GITHUB_REPO = 'sonicrelay';
+
+type UpdateInfo = { version: string; downloadUrl: string; releaseUrl: string };
+
+function compareVersions(current: string, latest: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number);
+  const c = parse(current);
+  const l = parse(latest);
+  for (let i = 0; i < Math.max(c.length, l.length); i++) {
+    const cv = c[i] || 0;
+    const lv = l[i] || 0;
+    if (lv > cv) return true;
+    if (lv < cv) return false;
+  }
+  return false;
+}
+
+function getAssetPattern(): string {
+  switch (process.platform) {
+    case 'win32': return '.exe';
+    case 'darwin': return '.dmg';
+    default: return '.AppImage';
+  }
+}
+
+function checkForUpdates(): Promise<UpdateInfo | null> {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
+      headers: { 'User-Agent': `SonicRelay/${app.getVersion()}` },
+    };
+
+    https.get(options, (res) => {
+      if (res.statusCode === 404) { resolve(null); return; }
+      if (res.statusCode !== 200) { resolve(null); return; }
+
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const release = JSON.parse(data);
+          const latest = release.tag_name as string;
+          if (!compareVersions(app.getVersion(), latest)) { resolve(null); return; }
+
+          const ext = getAssetPattern();
+          const asset = (release.assets as { name: string; browser_download_url: string }[])
+            .find((a) => a.name.endsWith(ext));
+
+          resolve({
+            version: latest.replace(/^v/, ''),
+            downloadUrl: asset?.browser_download_url ?? '',
+            releaseUrl: release.html_url as string,
+          });
+        } catch { resolve(null); }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
+function downloadAsset(url: string, destPath: string, onProgress: (percent: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const follow = (downloadUrl: string) => {
+      https.get(downloadUrl, { headers: { 'User-Agent': `SonicRelay/${app.getVersion()}` } }, (res) => {
+        // Follow redirects (GitHub sends 302 to the actual file)
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          const location = res.headers.location;
+          if (location) { follow(location); return; }
+        }
+        if (res.statusCode !== 200) { reject(new Error(`Download failed: ${res.statusCode}`)); return; }
+
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+        let receivedBytes = 0;
+        const file = fs.createWriteStream(destPath);
+
+        res.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+          if (totalBytes > 0) onProgress(Math.round((receivedBytes / totalBytes) * 100));
+        });
+        res.pipe(file);
+        file.on('finish', () => { file.close(); resolve(); });
+        file.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
+      }).on('error', reject);
+    };
+    follow(url);
+  });
+}
 
 // Register scheme as privileged before app ready (must be synchronous, before any async)
 protocol.registerSchemesAsPrivileged([{
@@ -159,6 +251,41 @@ app.on('ready', () => {
       }
     }
     callback({});
+  });
+
+  // --- Update IPC handlers ---
+
+  let pendingUpdate: UpdateInfo | null = null;
+
+  ipcMain.handle('check-for-update', async () => {
+    pendingUpdate = await checkForUpdates();
+    return pendingUpdate;
+  });
+
+  ipcMain.handle('download-update', async (event) => {
+    if (!pendingUpdate || !pendingUpdate.downloadUrl) return { success: false, error: 'No update available' };
+
+    const ext = getAssetPattern();
+    const fileName = `SonicRelay-${pendingUpdate.version}${ext}`;
+    const destPath = path.join(app.getPath('downloads'), fileName);
+
+    try {
+      await downloadAsset(pendingUpdate.downloadUrl, destPath, (percent) => {
+        mainWindow?.webContents.send('update-download-progress', percent);
+      });
+      return { success: true, filePath: destPath };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('install-update', async (_event, filePath: string) => {
+    shell.openPath(filePath);
+    app.quit();
+  });
+
+  ipcMain.handle('open-release-page', async (_event, url: string) => {
+    shell.openExternal(url);
   });
 
   createWindow();

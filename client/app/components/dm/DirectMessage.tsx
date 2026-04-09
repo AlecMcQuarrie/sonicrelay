@@ -3,6 +3,7 @@ import { SendHorizontal, ShieldCheck } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import { Skeleton } from "~/components/ui/skeleton";
 import { importPublicKey, deriveSharedSecret, encrypt, decrypt } from "~/lib/crypto";
+import { getProtocol } from "~/lib/protocol";
 
 type DecryptedMessage = {
   __id: string;
@@ -45,7 +46,7 @@ export default function DirectMessage({
   const loadingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const protocol = serverIP.includes("localhost") || serverIP.includes("127.0.0.1") ? "http" : "https";
+  const protocol = getProtocol(serverIP);
 
   // Derive the shared secret and load initial messages
   useEffect(() => {
