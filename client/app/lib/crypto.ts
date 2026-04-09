@@ -84,20 +84,57 @@ export async function wrapPrivateKey(privateKey: CryptoKey, wrappingKey: CryptoK
 }
 
 // Unwraps a private key by decrypting with AES-GCM, then importing from PKCS8.
+// Key is extractable so it can be cached in sessionStorage across page refreshes.
 export async function unwrapPrivateKey(wrappedJson: string, wrappingKey: CryptoKey): Promise<CryptoKey> {
-  const { iv, data } = JSON.parse(wrappedJson);
+  let parsed: { iv?: string; data?: string };
+  try {
+    parsed = JSON.parse(wrappedJson);
+  } catch {
+    throw new Error("Encrypted key data is corrupted");
+  }
+  if (!parsed.iv || !parsed.data) {
+    throw new Error("Encrypted key data is missing fields");
+  }
   const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToArrayBuffer(iv) },
+    { name: "AES-GCM", iv: base64ToArrayBuffer(parsed.iv) },
     wrappingKey,
-    base64ToArrayBuffer(data),
+    base64ToArrayBuffer(parsed.data),
   );
   return crypto.subtle.importKey(
     "pkcs8",
     decrypted,
     ECDH_CURVE,
-    false,
+    true,
     ["deriveKey"],
   );
+}
+
+// --- Session Key Caching (survives page refresh, cleared on tab close) ---
+
+export async function savePrivateKeyToSession(key: CryptoKey): Promise<void> {
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", key);
+  sessionStorage.setItem("dm_private_key", arrayBufferToBase64(pkcs8));
+}
+
+export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
+  const stored = sessionStorage.getItem("dm_private_key");
+  if (!stored) return null;
+  try {
+    return await crypto.subtle.importKey(
+      "pkcs8",
+      base64ToArrayBuffer(stored),
+      ECDH_CURVE,
+      true,
+      ["deriveKey"],
+    );
+  } catch {
+    sessionStorage.removeItem("dm_private_key");
+    return null;
+  }
+}
+
+export function clearPrivateKeyFromSession(): void {
+  sessionStorage.removeItem("dm_private_key");
 }
 
 // --- ECDH Shared Secret Derivation ---

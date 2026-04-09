@@ -38,8 +38,13 @@ export default function UnlockModal({ open, onOpenChange, encryptedPrivateKey, p
       setPassword("");
       onUnlocked(privateKey);
       onOpenChange(false);
-    } catch {
-      setError("Incorrect password");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (message === "Encrypted key data is corrupted" || message === "Encrypted key data is missing fields") {
+        setError("Encryption data is corrupted. Try logging out and back in.");
+      } else {
+        setError("Incorrect password");
+      }
     } finally {
       setUnlocking(false);
     }

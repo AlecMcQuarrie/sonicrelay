@@ -103,7 +103,7 @@ export default function DirectMessage({
 
     ws.addEventListener("message", handler);
     return () => ws.removeEventListener("message", handler);
-  }, [wsRef.current, partner, username]);
+  }, [partner, username]);
 
   // Infinite scroll for older messages
   useEffect(() => {
@@ -129,18 +129,23 @@ export default function DirectMessage({
     setLoadingMore(true);
     observerRef.current?.disconnect();
 
-    const oldest = messages[0];
-    const res = await fetch(
-      `${protocol}://${serverIP}/dm/messages/${partner}?limit=50&before=${oldest.__id}`,
-      { headers: { "access-token": accessToken } },
-    );
-    const data = await res.json();
-    const decrypted = await decryptMessages(data.messages, sharedKey);
+    try {
+      const oldest = messages[0];
+      const res = await fetch(
+        `${protocol}://${serverIP}/dm/messages/${partner}?limit=50&before=${oldest.__id}`,
+        { headers: { "access-token": accessToken } },
+      );
+      const data = await res.json();
+      const decrypted = await decryptMessages(data.messages, sharedKey);
 
-    setMessages((prev) => [...decrypted, ...prev]);
-    setHasMore(data.hasMore);
-    setLoadingMore(false);
-    loadingRef.current = false;
+      setMessages((prev) => [...decrypted, ...prev]);
+      setHasMore(data.hasMore);
+    } catch {
+      // Network error — allow retry
+    } finally {
+      setLoadingMore(false);
+      loadingRef.current = false;
+    }
   }, [hasMore, messages, partner, accessToken]);
 
   async function decryptMessages(
@@ -162,17 +167,20 @@ export default function DirectMessage({
   async function sendMessage() {
     const text = input.trim();
     if (!text || !sharedKeyRef.current) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    const { iv, ciphertext } = await encrypt(sharedKeyRef.current, text);
-
-    wsRef.current?.send(JSON.stringify({
-      type: "dm-message",
-      recipient: partner,
-      iv,
-      ciphertext,
-    }));
-
-    setInput("");
+    try {
+      const { iv, ciphertext } = await encrypt(sharedKeyRef.current, text);
+      wsRef.current.send(JSON.stringify({
+        type: "dm-message",
+        recipient: partner,
+        iv,
+        ciphertext,
+      }));
+      setInput("");
+    } catch {
+      // Encryption or send failed — keep input so user can retry
+    }
     textareaRef.current?.focus();
   }
 

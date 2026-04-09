@@ -11,6 +11,8 @@ import {
   unwrapPrivateKey,
   arrayBufferToBase64,
   base64ToArrayBuffer,
+  savePrivateKeyToSession,
+  loadPrivateKeyFromSession,
 } from "~/lib/crypto";
 
 export function meta({ }: Route.MetaArgs) {
@@ -29,25 +31,29 @@ export default function Home() {
   const [isNewSession, setIsNewSession] = useState<boolean | null>(null);
   const [privateKey, setPrivateKey] = useState<CryptoKey | null>(null);
 
-  // Initial load, only runs once
-  // Checks for previous connection data in the browser's local storage
+  // Initial load — restore session from localStorage + sessionStorage
   useEffect(() => {
     const data = localStorage.getItem("connectionData");
+    if (!data) {
+      setIsNewSession(true);
+      return;
+    }
 
-    if (data) {
-      const parsedData = JSON.parse(data);
-      // Force re-login if account is missing encryption keys or has old format
-      const epk = parsedData.encryptedPrivateKey;
-      if (!epk || !parsedData.pbkdfSalt || !epk.startsWith('{')) {
-        localStorage.removeItem("connectionData");
-        setIsNewSession(true);
-        return;
-      }
+    const parsedData = JSON.parse(data);
+    // Force re-login if account is missing encryption keys or has old format
+    const epk = parsedData.encryptedPrivateKey;
+    if (!epk || !parsedData.pbkdfSalt || !epk.startsWith('{')) {
+      localStorage.removeItem("connectionData");
+      setIsNewSession(true);
+      return;
+    }
+
+    // Try to restore private key from sessionStorage (survives page refresh)
+    loadPrivateKeyFromSession().then((cachedKey) => {
+      if (cachedKey) setPrivateKey(cachedKey);
       setConnectionData(parsedData);
       setIsNewSession(false);
-    } else {
-      setIsNewSession(true);
-    }
+    });
   }, []);
 
   const joinServer = useCallback(async (serverIP: string, username: string, password: string, isRegistration: boolean) => {
@@ -114,6 +120,9 @@ export default function Home() {
         });
       }
     }
+    if (unlockedPrivateKey) {
+      await savePrivateKeyToSession(unlockedPrivateKey);
+    }
     setPrivateKey(unlockedPrivateKey);
 
     const formattedConnectionData = {
@@ -141,7 +150,10 @@ export default function Home() {
         privateKey={privateKey}
         encryptedPrivateKey={connectionData.encryptedPrivateKey || null}
         pbkdfSalt={connectionData.pbkdfSalt || null}
-        onPrivateKeyUnlocked={setPrivateKey}
+        onPrivateKeyUnlocked={(key: CryptoKey) => {
+          savePrivateKeyToSession(key);
+          setPrivateKey(key);
+        }}
       />
     );
   }

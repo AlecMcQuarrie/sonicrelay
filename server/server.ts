@@ -426,7 +426,9 @@ app.get("/dm/conversations", (req: Request, res: Response) => {
   const convMap = new Map<string, string>(); // partner -> lastTimestamp
 
   for (const dm of allDms) {
-    const [userA, userB] = dm.conversationId.split(':');
+    const parts = dm.conversationId.split(':');
+    if (parts.length !== 2) continue;
+    const [userA, userB] = parts;
     let partner: string;
     if (userA === auth.username) partner = userB;
     else if (userB === auth.username) partner = userA;
@@ -700,6 +702,17 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
     // ── Direct message (E2E encrypted) ──
     if (msg.type === 'dm-message') {
+      // Validate required fields
+      if (!msg.recipient || typeof msg.recipient !== 'string') return;
+      if (!msg.iv || typeof msg.iv !== 'string') return;
+      if (!msg.ciphertext || typeof msg.ciphertext !== 'string') return;
+      if (msg.iv.length > 100 || msg.ciphertext.length > 100_000) return;
+      if (msg.recipient === username) return; // Can't DM yourself
+
+      // Validate recipient exists and isn't banned
+      const recipient = Users.get((u) => u.username === msg.recipient);
+      if (!recipient || recipient.banned) return;
+
       const conversationId = [username, msg.recipient].sort().join(':');
       const timestamp = new Date().toISOString();
       const stored = DirectMessages.create({
