@@ -38,7 +38,7 @@ export default function ScreenAudioControls({ username, setting, disabled, onVol
         <input
           type="range"
           min="0"
-          max="1"
+          max="2"
           step="0.05"
           value={volume}
           disabled={disabled}
