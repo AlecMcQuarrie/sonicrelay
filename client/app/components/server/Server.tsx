@@ -3,7 +3,6 @@ import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import DirectMessage from "~/components/dm/DirectMessage";
 import FocusedVideo from "~/components/focused-video/FocusedVideo";
 import TextChannel from "~/components/text-channel/TextChannel";
-import UnlockModal from "~/components/unlock-modal/UnlockModal";
 import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
@@ -24,12 +23,9 @@ interface ServerProps {
   accessToken: string;
   username: string;
   privateKey: CryptoKey | null;
-  encryptedPrivateKey: string | null;
-  pbkdfSalt: string | null;
-  onPrivateKeyUnlocked: (key: CryptoKey) => void;
 }
 
-export default function Server({ serverIP, accessToken, username, privateKey, encryptedPrivateKey, pbkdfSalt, onPrivateKeyUnlocked }: ServerProps) {
+export default function Server({ serverIP, accessToken, username, privateKey }: ServerProps) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
@@ -56,7 +52,6 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
   const [selectedDmPartner, setSelectedDmPartner] = useState<string | null>(null);
   const [dmConversations, setDmConversations] = useState<{ partner: string; lastTimestamp: string }[]>([]);
   const [publicKeys, setPublicKeys] = useState<Record<string, string>>({});
-  const [unlockModalOpen, setUnlockModalOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
@@ -448,13 +443,7 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
 
   const startDm = useCallback((partner: string) => {
     if (partner === username) return;
-    // If private key isn't unlocked yet, open the unlock modal
-    if (!privateKey) {
-      if (encryptedPrivateKey && pbkdfSalt) {
-        setUnlockModalOpen(true);
-      }
-      return;
-    }
+    if (!privateKey) return;
     setSelectedDmPartner(partner);
     setSelectedTextChannelId(null);
     // Add to conversation list if not already present
@@ -495,10 +484,6 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
           dmConversations={dmConversations}
           selectedDmPartner={selectedDmPartner}
           onSelectDm={startDm}
-          privateKey={privateKey}
-          encryptedPrivateKey={encryptedPrivateKey}
-          pbkdfSalt={pbkdfSalt}
-          onUnlockDms={() => setUnlockModalOpen(true)}
           profilePhotos={profilePhotos}
           serverIP={serverIP}
           screenAudioPeerSettings={screenAudioPeerSettings}
@@ -621,15 +606,6 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
           onStartDm={startDm}
         />
       </div>
-      {encryptedPrivateKey && pbkdfSalt && !privateKey && (
-        <UnlockModal
-          open={unlockModalOpen}
-          onOpenChange={setUnlockModalOpen}
-          encryptedPrivateKey={encryptedPrivateKey}
-          pbkdfSalt={pbkdfSalt}
-          onUnlocked={onPrivateKeyUnlocked}
-        />
-      )}
     </div>
   );
 }

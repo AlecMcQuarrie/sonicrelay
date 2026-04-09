@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Hash, Volume2, MicOff, HeadphoneOff, Plus, Lock, MessageSquare } from "lucide-react";
+import { Hash, Volume2, MicOff, HeadphoneOff, Plus } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import PeerVolumeMenu from "./PeerVolumeMenu";
 import ScreenAudioControls from "./ScreenAudioControls";
@@ -50,10 +50,6 @@ interface ChannelSidebarProps {
   dmConversations: { partner: string; lastTimestamp: string }[];
   selectedDmPartner: string | null;
   onSelectDm: (partner: string) => void;
-  privateKey: CryptoKey | null;
-  encryptedPrivateKey: string | null;
-  pbkdfSalt: string | null;
-  onUnlockDms: () => void;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
 }
@@ -187,10 +183,6 @@ export default function ChannelSidebar({
   dmConversations,
   selectedDmPartner,
   onSelectDm,
-  privateKey,
-  encryptedPrivateKey,
-  pbkdfSalt,
-  onUnlockDms,
   profilePhotos,
   serverIP,
 }: ChannelSidebarProps) {
@@ -279,24 +271,11 @@ export default function ChannelSidebar({
       </div>
 
       {/* Direct Messages */}
-      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground flex items-center justify-between">
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
         Direct Messages
-        {!privateKey && encryptedPrivateKey && pbkdfSalt && (
-          <button onClick={onUnlockDms} className="hover:text-foreground transition-colors" title="Unlock DMs">
-            <Lock className="w-4 h-4" />
-          </button>
-        )}
       </div>
       <div className="px-2 pb-1 space-y-1">
-        {!privateKey && encryptedPrivateKey && pbkdfSalt ? (
-          <button
-            onClick={onUnlockDms}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent rounded-md"
-          >
-            <Lock className="w-4 h-4" />
-            <span>Unlock to view DMs</span>
-          </button>
-        ) : dmConversations.length === 0 ? (
+        {dmConversations.length === 0 ? (
           <div className="px-2 py-1.5 text-sm text-muted-foreground">No conversations yet</div>
         ) : (
           dmConversations.map((conv) => {

@@ -133,9 +133,6 @@ export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
   }
 }
 
-export function clearPrivateKeyFromSession(): void {
-  sessionStorage.removeItem("dm_private_key");
-}
 
 // --- ECDH Shared Secret Derivation ---
 

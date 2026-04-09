@@ -49,10 +49,16 @@ export default function Home() {
     }
 
     // Try to restore private key from sessionStorage (survives page refresh)
+    // If not found (new tab or cleared), force re-login so password can unlock it
     loadPrivateKeyFromSession().then((cachedKey) => {
-      if (cachedKey) setPrivateKey(cachedKey);
-      setConnectionData(parsedData);
-      setIsNewSession(false);
+      if (cachedKey) {
+        setPrivateKey(cachedKey);
+        setConnectionData(parsedData);
+        setIsNewSession(false);
+      } else {
+        localStorage.removeItem("connectionData");
+        setIsNewSession(true);
+      }
     });
   }, []);
 
@@ -148,12 +154,6 @@ export default function Home() {
         accessToken={connectionData.accessToken}
         username={connectionData.username}
         privateKey={privateKey}
-        encryptedPrivateKey={connectionData.encryptedPrivateKey || null}
-        pbkdfSalt={connectionData.pbkdfSalt || null}
-        onPrivateKeyUnlocked={(key: CryptoKey) => {
-          savePrivateKeyToSession(key);
-          setPrivateKey(key);
-        }}
       />
     );
   }
