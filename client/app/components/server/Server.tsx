@@ -64,6 +64,13 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
   const screenAudioPeerSettingsRef = useRef(screenAudioPeerSettings);
   screenAudioPeerSettingsRef.current = screenAudioPeerSettings;
 
+  // Auto-open unlock modal if private key is missing but encrypted key exists
+  useEffect(() => {
+    if (!privateKey && encryptedPrivateKey && pbkdfSalt) {
+      setUnlockModalOpen(true);
+    }
+  }, [privateKey, encryptedPrivateKey, pbkdfSalt]);
+
   // Fetch channels and set up WebSocket
   useEffect(() => {
     const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
