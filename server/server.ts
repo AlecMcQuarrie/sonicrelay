@@ -353,7 +353,11 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
           case 'leave': {
             const closedProducerIds = voice.leave(msg.channelId, username);
             const client = clients.get(ws);
-            if (client) client.voiceChannelId = null;
+            if (client) {
+              client.voiceChannelId = null;
+              client.isMuted = false;
+              client.isDeafened = false;
+            }
             for (const producerId of closedProducerIds) {
               broadcastToVoiceChannel(msg.channelId, {
                 type: 'voice-notification', action: 'producer-closed', producerId,

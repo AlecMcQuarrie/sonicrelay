@@ -34,7 +34,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(() => localStorage.getItem('voiceMuted') === 'true');
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
   const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
@@ -48,7 +48,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [selfMutedUsers, setSelfMutedUsers] = useState<Set<string>>(new Set());
   const [deafenedUsers, setDeafenedUsers] = useState<Set<string>>(new Set());
-  const [isDeafened, setIsDeafened] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(() => localStorage.getItem('voiceDeafened') === 'true');
   const [voicePeerSettings, setVoicePeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
@@ -324,10 +324,19 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
     if (voiceChannelId) await voiceRef.current?.leave();
     await voiceRef.current?.join(channelId, username);
     setVoiceChannelId(channelId);
-    setIsMuted(false);
     setIsCameraOn(false);
     setIsScreenSharing(false);
-    setIsDeafened(false);
+
+    // Restore persisted mute/deafen state
+    const wasMuted = localStorage.getItem('voiceMuted') === 'true';
+    const wasDeafened = localStorage.getItem('voiceDeafened') === 'true';
+    setIsMuted(wasMuted);
+    setIsDeafened(wasDeafened);
+    if (wasMuted) voiceRef.current?.toggleMute();
+    if (wasDeafened) voiceRef.current?.setDeafened(true);
+    wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted: wasMuted }));
+    wsRef.current?.send(JSON.stringify({ type: 'deafen-state', deafened: wasDeafened }));
+
     // Apply saved volume/mute settings for existing peers
     setTimeout(() => {
       for (const [user, s] of Object.entries(voicePeerSettingsRef.current)) {
@@ -340,31 +349,33 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const leaveVoiceChannel = useCallback(async () => {
     await voiceRef.current?.leave();
     setVoiceChannelId(null);
-    setIsMuted(false);
     setIsCameraOn(false);
     setIsScreenSharing(false);
-    setIsDeafened(false);
     setScreenTracks(new Map());
     setVideoTracks(new Map());
     setScreenAudioUsers(new Set());
     setFocusedVideoUsers(new Set());
+    // Mute/deafen state intentionally NOT reset — persisted via localStorage
   }, []);
 
   const toggleMute = useCallback(() => {
     const muted = voiceRef.current?.toggleMute() ?? false;
     setIsMuted(muted);
+    localStorage.setItem('voiceMuted', String(muted));
     wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted }));
   }, []);
 
   const toggleDeafen = useCallback(() => {
     const next = !isDeafened;
     setIsDeafened(next);
+    localStorage.setItem('voiceDeafened', String(next));
     voiceRef.current?.setDeafened(next);
     wsRef.current?.send(JSON.stringify({ type: 'deafen-state', deafened: next }));
     // Deafening also mutes you (like Discord)
     if (next && !isMuted) {
       const muted = voiceRef.current?.toggleMute() ?? false;
       setIsMuted(muted);
+      localStorage.setItem('voiceMuted', String(muted));
       wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted: true }));
     }
     // Undeafening does NOT auto-unmute — user must unmute manually

@@ -241,11 +241,14 @@ export class VoiceClient {
       const audio = this.createAudioElement();
       audio.srcObject = new MediaStream([consumer.track]);
       if (this.audioContext) {
-        const source = this.audioContext.createMediaElementSource(audio);
+        // Use createMediaStreamSource (not createMediaElementSource) — the latter
+        // doesn't reliably route audio from MediaStream srcObject in Chrome/Electron.
+        const streamSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
         const gainNode = this.audioContext.createGain();
-        source.connect(gainNode);
+        streamSource.connect(gainNode);
         gainNode.connect(this.audioContext.destination);
         this.screenAudioGainNodes.set(remoteUsername, gainNode);
+        audio.volume = 0; // Silence element; playback goes through Web Audio graph
       }
       audio.play();
       this.screenAudioElements.set(remoteUsername, audio);
@@ -257,11 +260,12 @@ export class VoiceClient {
     const audio = this.createAudioElement();
     audio.srcObject = new MediaStream([consumer.track]);
     if (remoteUsername && this.audioContext) {
-      const elementSource = this.audioContext.createMediaElementSource(audio);
+      const streamSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
       const gainNode = this.audioContext.createGain();
-      elementSource.connect(gainNode);
+      streamSource.connect(gainNode);
       gainNode.connect(this.audioContext.destination);
       this.userGainNodes.set(remoteUsername, gainNode);
+      audio.volume = 0; // Silence element; playback goes through Web Audio graph
     }
     audio.play();
     this.audioElements.set(producerId, audio);
@@ -570,7 +574,13 @@ export class VoiceClient {
 
   setScreenAudioVolume(username: string, volume: number) {
     const gain = this.screenAudioGainNodes.get(username);
-    if (gain) gain.gain.value = Math.max(0, Math.min(2, volume));
+    if (gain) {
+      gain.gain.value = Math.max(0, Math.min(2, volume));
+    } else {
+      // Fallback: no GainNode (AudioContext unavailable), use element volume (caps at 1)
+      const audio = this.screenAudioElements.get(username);
+      if (audio) audio.volume = Math.max(0, Math.min(1, volume));
+    }
   }
 
   setScreenAudioMuted(username: string, muted: boolean) {
@@ -580,7 +590,13 @@ export class VoiceClient {
 
   setUserVolume(username: string, volume: number) {
     const gain = this.userGainNodes.get(username);
-    if (gain) gain.gain.value = Math.max(0, Math.min(2, volume));
+    if (gain) {
+      gain.gain.value = Math.max(0, Math.min(2, volume));
+    } else {
+      // Fallback: no GainNode (AudioContext unavailable), use element volume (caps at 1)
+      const audio = this.userAudioElements.get(username);
+      if (audio) audio.volume = Math.max(0, Math.min(1, volume));
+    }
   }
 
   setUserMuted(username: string, muted: boolean) {

@@ -49,6 +49,9 @@ export default function PeerVolumeMenu({ username, setting, disabled, onVolume, 
             onVolume(username, v);
           }}
         />
+        <span className="text-[10px] text-muted-foreground tabular-nums min-w-[32px] text-right shrink-0">
+          {Math.round(volume * 100)}%
+        </span>
       </div>
     </div>
   );

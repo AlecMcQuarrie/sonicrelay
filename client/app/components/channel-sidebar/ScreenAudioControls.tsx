@@ -49,6 +49,9 @@ export default function ScreenAudioControls({ username, setting, disabled, onVol
             onVolume(username, v);
           }}
         />
+        <span className="text-[10px] text-muted-foreground tabular-nums min-w-[32px] text-right shrink-0">
+          {Math.round(volume * 100)}%
+        </span>
       </div>
     </div>
   );
