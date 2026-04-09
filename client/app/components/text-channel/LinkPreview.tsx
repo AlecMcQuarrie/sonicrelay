@@ -65,7 +65,7 @@ export default function LinkPreview({ url, serverIP, accessToken, cachedOg }: Li
         </div>
       ) : og.image ? (
         <img
-          src={og.image}
+          src={og.image.replace(/^http:\/\//, 'https://')}
           alt={og.title || "Link preview"}
           className="w-full max-h-48 object-cover"
         />

@@ -109,15 +109,15 @@ export async function unwrapPrivateKey(wrappedJson: string, wrappingKey: CryptoK
   );
 }
 
-// --- Session Key Caching (survives page refresh, cleared on tab close) ---
+// --- Session Key Caching (survives page refresh and app restart) ---
 
 export async function savePrivateKeyToSession(key: CryptoKey): Promise<void> {
   const pkcs8 = await crypto.subtle.exportKey("pkcs8", key);
-  sessionStorage.setItem("dm_private_key", arrayBufferToBase64(pkcs8));
+  localStorage.setItem("dm_private_key", arrayBufferToBase64(pkcs8));
 }
 
 export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
-  const stored = sessionStorage.getItem("dm_private_key");
+  const stored = localStorage.getItem("dm_private_key");
   if (!stored) return null;
   try {
     return await crypto.subtle.importKey(
@@ -128,7 +128,7 @@ export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
       ["deriveKey"],
     );
   } catch {
-    sessionStorage.removeItem("dm_private_key");
+    localStorage.removeItem("dm_private_key");
     return null;
   }
 }
