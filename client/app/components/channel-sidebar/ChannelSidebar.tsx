@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
-import { Hash, Volume2, MicOff, HeadphoneOff } from "lucide-react";
+import { Hash, Volume2, MicOff, HeadphoneOff, Plus } from "lucide-react";
 import PeerVolumeMenu from "./PeerVolumeMenu";
 import ScreenAudioControls from "./ScreenAudioControls";
+import CreateChannelDialog from "./CreateChannelDialog";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -43,6 +44,8 @@ interface ChannelSidebarProps {
   onScreenAudioMute: (username: string, muted: boolean) => void;
   onUserVolume: (username: string, volume: number) => void;
   onUserMute: (username: string, muted: boolean) => void;
+  canCreateChannel: boolean;
+  onCreateChannel: (name: string, type: "text" | "voice") => void;
 }
 
 function pingColor(ms: number): string {
@@ -169,14 +172,29 @@ export default function ChannelSidebar({
   screenAudioPeerSettings,
   onUserVolume,
   onUserMute,
+  canCreateChannel,
+  onCreateChannel,
 }: ChannelSidebarProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
 
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDialogType, setCreateDialogType] = useState<"text" | "voice">("text");
+
+  const openCreateDialog = (type: "text" | "voice") => {
+    setCreateDialogType(type);
+    setCreateDialogOpen(true);
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground flex items-center justify-between">
         Text Channels
+        {canCreateChannel && (
+          <button onClick={() => openCreateDialog("text")} className="hover:text-foreground transition-colors">
+            <Plus className="w-4 h-4" />
+          </button>
+        )}
       </div>
       <div className="px-2 pb-1 space-y-1">
         {textChannels.map((channel) => (
@@ -192,8 +210,13 @@ export default function ChannelSidebar({
         ))}
       </div>
 
-      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground">
+      <div className="p-4 pb-1 font-bold text-xs uppercase tracking-wide text-muted-foreground flex items-center justify-between">
         Voice Channels
+        {canCreateChannel && (
+          <button onClick={() => openCreateDialog("voice")} className="hover:text-foreground transition-colors">
+            <Plus className="w-4 h-4" />
+          </button>
+        )}
       </div>
       <div className="px-2 space-y-1">
         {voiceChannels.map((channel) => (
@@ -235,6 +258,13 @@ export default function ChannelSidebar({
           </div>
         ))}
       </div>
+
+      <CreateChannelDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        defaultType={createDialogType}
+        onCreateChannel={onCreateChannel}
+      />
     </div>
   );
 }

@@ -4,6 +4,16 @@ import type { types } from 'mediasoup';
 // Codec configuration
 const mediaCodecs: types.RouterRtpCodecCapability[] = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
+  {
+    kind: 'video',
+    mimeType: 'video/H264',
+    clockRate: 90000,
+    parameters: {
+      'packetization-mode': 1,
+      'profile-level-id': '42e01f',
+      'level-asymmetry-allowed': 1,
+    },
+  },
   { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 },
 ];
 
@@ -88,6 +98,7 @@ export async function createTransport(channelId: string, username: string, direc
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
+    initialAvailableOutgoingBitrate: 1_000_000,
   });
 
   if (direction === 'send') peer.sendTransport = transport;

@@ -1,6 +1,29 @@
 import { Device } from 'mediasoup-client';
 import type { types } from 'mediasoup-client';
 
+export type ScreenShareSettings = {
+  resolution: 720 | 1080 | 1440;
+  frameRate: 30 | 60;
+  contentHint: 'motion' | 'detail';
+};
+
+// Bitrate targets by resolution and frame rate (matches Discord Nitro-tier quality)
+const SCREEN_BITRATES: Record<string, number> = {
+  '720-30':  2_500_000,
+  '720-60':  4_000_000,
+  '1080-30': 4_000_000,
+  '1080-60': 8_000_000,
+  '1440-30': 6_000_000,
+  '1440-60': 12_000_000,
+};
+
+// Resolution height -> width (16:9 aspect ratio)
+const RESOLUTION_WIDTH: Record<number, number> = {
+  720: 1280,
+  1080: 1920,
+  1440: 2560,
+};
+
 // Send a voice request over WebSocket and await the matching response
 function request(ws: WebSocket, action: string, data: Record<string, any> = {}): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -360,15 +383,57 @@ export class VoiceClient {
     }
   }
 
-  async startScreenShare() {
+  async startScreenShare(settings: ScreenShareSettings) {
     if (!this.sendTransport || !this.channelId || this.screenProducer) return;
-    this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+    const width = RESOLUTION_WIDTH[settings.resolution];
+    const height = settings.resolution;
+
+    this.screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: width, max: width },
+        height: { ideal: height, max: height },
+        frameRate: { ideal: settings.frameRate, max: settings.frameRate },
+      },
+      audio: {
+        // Disable voice processing — this is game/media audio, not speech
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
     const screenTrack = this.screenStream.getVideoTracks()[0];
+
+    // Tell the encoder whether to prioritize framerate (motion) or sharpness (detail).
+    // 'motion' keeps 60fps under bandwidth pressure by reducing quality slightly.
+    // 'detail' keeps text crisp but drops framerate when constrained.
+    screenTrack.contentHint = settings.contentHint;
 
     // Browser "Stop sharing" button closes the track — handle it
     screenTrack.onended = () => { this.stopScreenShare(); };
 
-    this.screenProducer = await this.sendTransport.produce({ track: screenTrack, appData: { source: 'screen' } });
+    const maxBitrate = SCREEN_BITRATES[`${settings.resolution}-${settings.frameRate}`];
+
+    // Prefer H.264 — nearly every GPU has hardware H.264 encoding (NVENC, QuickSync, AMF),
+    // which offloads encoding from the CPU. Critical when the user is gaming and sharing.
+    const h264Codec = this.device?.rtpCapabilities.codecs?.find(
+      (c) => c.mimeType.toLowerCase() === 'video/h264'
+    );
+
+    this.screenProducer = await this.sendTransport.produce({
+      track: screenTrack,
+      appData: { source: 'screen' },
+      codec: h264Codec,
+      encodings: [{
+        maxBitrate,
+        maxFramerate: settings.frameRate,
+        priority: 'high',
+        networkPriority: 'high',
+      }],
+      codecOptions: {
+        videoGoogleStartBitrate: 1000,
+      },
+    });
 
     // Produce screen audio if the user shared a tab/window with audio
     const audioTrack = this.screenStream.getAudioTracks()[0];

@@ -234,8 +234,14 @@ app.get("/channels", (req: Request, res: Response) => {
 });
 
 app.post("/channels", (req: Request, res: Response) => {
-  if (!authenticate(req)) return res.sendStatus(401);
-  const channel = Channels.create({ name: req.body.name, type: req.body.type || "text" });
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  if (auth.role === 'member') return res.sendStatus(403);
+  const { name, type } = req.body;
+  if (!name?.trim() || !['text', 'voice'].includes(type)) {
+    return res.status(400).json({ error: "Name and type (text/voice) are required" });
+  }
+  const channel = Channels.create({ name: name.trim(), type });
   return res.status(200).json({ channel });
 });
 

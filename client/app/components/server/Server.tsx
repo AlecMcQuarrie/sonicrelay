@@ -6,6 +6,7 @@ import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { VoiceClient } from "~/lib/voice";
+import type { ScreenShareSettings } from "~/lib/voice";
 
 type Channel = {
   name: string;
@@ -293,6 +294,10 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setIsCameraOn(false);
     setIsScreenSharing(false);
     setIsDeafened(false);
+    setScreenTracks(new Map());
+    setVideoTracks(new Map());
+    setScreenAudioUsers(new Set());
+    setFocusedVideoUsers(new Set());
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -324,13 +329,13 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     setIsCameraOn(!isCameraOn);
   }, [isCameraOn]);
 
-  const toggleScreenShare = useCallback(async () => {
-    if (isScreenSharing) {
-      await voiceRef.current?.stopScreenShare();
-    } else {
-      await voiceRef.current?.startScreenShare();
-    }
-  }, [isScreenSharing]);
+  const startScreenShare = useCallback(async (settings: ScreenShareSettings) => {
+    await voiceRef.current?.startScreenShare(settings);
+  }, []);
+
+  const stopScreenShare = useCallback(async () => {
+    await voiceRef.current?.stopScreenShare();
+  }, []);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
@@ -401,6 +406,18 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
     });
   }, [protocol, serverIP, accessToken]);
 
+  const createChannel = useCallback(async (name: string, type: "text" | "voice") => {
+    const res = await fetch(`${protocol}://${serverIP}/channels`, {
+      method: 'POST',
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ name, type }),
+    });
+    if (!res.ok) return;
+    const { channel } = await res.json();
+    setChannels((prev) => [...prev, channel]);
+    if (type === "text") setSelectedTextChannelId(channel.__id);
+  }, [protocol, serverIP, accessToken]);
+
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
@@ -434,6 +451,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
           onUserVolume={handleUserVolume}
           onUserMute={handleUserMute}
           onJoinVoiceChannel={joinVoiceChannel}
+          canCreateChannel={myRole !== 'member'}
+          onCreateChannel={createChannel}
           onFocusVideo={(user) => {
             setFocusedVideoUsers((prev) => {
               const next = new Set(prev);
@@ -453,7 +472,8 @@ export default function Server({ serverIP, accessToken, username }: ServerProps)
             onToggleMute={toggleMute}
             onToggleDeafen={toggleDeafen}
             onToggleCamera={toggleCamera}
-            onToggleScreenShare={toggleScreenShare}
+            onStartScreenShare={startScreenShare}
+            onStopScreenShare={stopScreenShare}
             onDisconnect={leaveVoiceChannel}
           />
         )}
