@@ -77,6 +77,11 @@ export class VoiceClient {
   private screenAudioElements = new Map<string, HTMLAudioElement>(); // username -> audio element
   private userGainNodes = new Map<string, GainNode>(); // username -> gain node for volume > 100%
   private screenAudioGainNodes = new Map<string, GainNode>(); // username -> gain node for screen audio
+  private mutedUserGains = new Map<string, number>(); // username -> gain value before mute
+  private mutedScreenGains = new Map<string, number>(); // username -> gain value before mute
+  private isDeafened = false;
+  private preDeafenUserGains = new Map<string, number>(); // username -> gain value before deafen
+  private preDeafenScreenGains = new Map<string, number>(); // username -> gain value before deafen
   private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen' | 'screen-audio'
   private ws: WebSocket;
   private channelId: string | null = null;
@@ -248,6 +253,7 @@ export class VoiceClient {
         streamSource.connect(gainNode);
         gainNode.connect(this.audioContext.destination);
         this.screenAudioGainNodes.set(remoteUsername, gainNode);
+        if (this.isDeafened) gainNode.gain.value = 0;
         audio.volume = 0; // Silence element; playback goes through Web Audio graph
       }
       audio.play();
@@ -265,6 +271,7 @@ export class VoiceClient {
       streamSource.connect(gainNode);
       gainNode.connect(this.audioContext.destination);
       this.userGainNodes.set(remoteUsername, gainNode);
+      if (this.isDeafened) gainNode.gain.value = 0;
       audio.volume = 0; // Silence element; playback goes through Web Audio graph
     }
     audio.play();
@@ -534,6 +541,8 @@ export class VoiceClient {
     this.screenAudioElements.forEach((a) => { a.srcObject = null; });
     this.screenAudioElements.clear();
     this.screenAudioGainNodes.clear();
+    this.mutedScreenGains.clear();
+    this.preDeafenScreenGains.clear();
     this.producerSources.clear();
 
     // Notify server, but don't let a dead WebSocket block cleanup
@@ -552,6 +561,9 @@ export class VoiceClient {
     this.audioElements.clear();
     this.userAudioElements.clear();
     this.userGainNodes.clear();
+    this.mutedUserGains.clear();
+    this.preDeafenUserGains.clear();
+    this.isDeafened = false;
     this.audioProducer = null;
     this.videoProducer = null;
     this.screenProducer = null;
@@ -584,8 +596,19 @@ export class VoiceClient {
   }
 
   setScreenAudioMuted(username: string, muted: boolean) {
-    const audio = this.screenAudioElements.get(username);
-    if (audio) audio.muted = muted;
+    const gain = this.screenAudioGainNodes.get(username);
+    if (gain) {
+      if (muted) {
+        this.mutedScreenGains.set(username, gain.gain.value);
+        gain.gain.value = 0;
+      } else {
+        gain.gain.value = this.mutedScreenGains.get(username) ?? 1;
+        this.mutedScreenGains.delete(username);
+      }
+    } else {
+      const audio = this.screenAudioElements.get(username);
+      if (audio) audio.muted = muted;
+    }
   }
 
   setUserVolume(username: string, volume: number) {
@@ -600,8 +623,19 @@ export class VoiceClient {
   }
 
   setUserMuted(username: string, muted: boolean) {
-    const audio = this.userAudioElements.get(username);
-    if (audio) audio.muted = muted;
+    const gain = this.userGainNodes.get(username);
+    if (gain) {
+      if (muted) {
+        this.mutedUserGains.set(username, gain.gain.value);
+        gain.gain.value = 0;
+      } else {
+        gain.gain.value = this.mutedUserGains.get(username) ?? 1;
+        this.mutedUserGains.delete(username);
+      }
+    } else {
+      const audio = this.userAudioElements.get(username);
+      if (audio) audio.muted = muted;
+    }
   }
 
   async switchAudioDevice(deviceId: string) {
@@ -656,6 +690,27 @@ export class VoiceClient {
   }
 
   setDeafened(deafened: boolean) {
+    this.isDeafened = deafened;
+    if (deafened) {
+      for (const [username, gain] of this.userGainNodes) {
+        this.preDeafenUserGains.set(username, gain.gain.value);
+        gain.gain.value = 0;
+      }
+      for (const [username, gain] of this.screenAudioGainNodes) {
+        this.preDeafenScreenGains.set(username, gain.gain.value);
+        gain.gain.value = 0;
+      }
+    } else {
+      for (const [username, gain] of this.userGainNodes) {
+        gain.gain.value = this.preDeafenUserGains.get(username) ?? 1;
+      }
+      for (const [username, gain] of this.screenAudioGainNodes) {
+        gain.gain.value = this.preDeafenScreenGains.get(username) ?? 1;
+      }
+      this.preDeafenUserGains.clear();
+      this.preDeafenScreenGains.clear();
+    }
+    // Fallback for elements without GainNodes
     for (const audio of this.audioElements.values()) {
       audio.muted = deafened;
     }
