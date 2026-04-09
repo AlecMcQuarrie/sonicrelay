@@ -7,6 +7,7 @@ import UnlockModal from "~/components/unlock-modal/UnlockModal";
 import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
+import { ShieldAlert } from "lucide-react";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
 
@@ -546,17 +547,25 @@ export default function Server({ serverIP, accessToken, username, privateKey, en
         />
       </div>
       <div className="flex-1 relative overflow-hidden">
-        {selectedDmPartner && privateKey && publicKeys[selectedDmPartner] ? (
-          <DirectMessage
-            serverIP={serverIP}
-            partner={selectedDmPartner}
-            accessToken={accessToken}
-            username={username}
-            wsRef={wsRef}
-            profilePhotos={profilePhotos}
-            privateKey={privateKey}
-            partnerPublicKey={publicKeys[selectedDmPartner]}
-          />
+        {selectedDmPartner ? (
+          privateKey && publicKeys[selectedDmPartner] ? (
+            <DirectMessage
+              serverIP={serverIP}
+              partner={selectedDmPartner}
+              accessToken={accessToken}
+              username={username}
+              wsRef={wsRef}
+              profilePhotos={profilePhotos}
+              privateKey={privateKey}
+              partnerPublicKey={publicKeys[selectedDmPartner]}
+            />
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
+              <ShieldAlert className="w-8 h-8" />
+              <p className="text-sm font-medium">{selectedDmPartner} hasn't set up encryption yet</p>
+              <p className="text-xs">They need to log in again to enable direct messages.</p>
+            </div>
+          )
         ) : selectedTextChannel ? (
           <TextChannel
             serverIP={serverIP}
