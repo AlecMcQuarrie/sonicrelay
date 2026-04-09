@@ -159,7 +159,12 @@ export class VoiceClient {
     // Produce audio from microphone
     const preferredAudio = localStorage.getItem("preferredAudioDevice");
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: preferredAudio ? { deviceId: { exact: preferredAudio } } : true,
+      audio: {
+        ...(preferredAudio && { deviceId: { exact: preferredAudio } }),
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
     });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
@@ -431,7 +436,7 @@ export class VoiceClient {
         networkPriority: 'high',
       }],
       codecOptions: {
-        videoGoogleStartBitrate: 1000,
+        videoGoogleStartBitrate: 10000,
       },
     });
 
@@ -570,7 +575,12 @@ export class VoiceClient {
   async switchAudioDevice(deviceId: string) {
     if (!this.audioProducer || !this.sendTransport) return;
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: {
+        ...(deviceId && { deviceId: { exact: deviceId } }),
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
     });
     const newTrack = stream.getAudioTracks()[0];
     await this.audioProducer.replaceTrack({ track: newTrack });

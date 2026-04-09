@@ -6,12 +6,9 @@ export type OgData = {
   url: string;
 };
 
-const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
-const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
+import { IMAGE_EXTS, getExt } from "~/lib/attachment-utils";
 
-function getExt(url: string): string {
-  return url.substring(url.lastIndexOf('.')).toLowerCase();
-}
+const URL_REGEX = /https?:\/\/[^\s<>)"']+/g;
 
 function preloadImage(url: string): Promise<void> {
   return new Promise((resolve) => {

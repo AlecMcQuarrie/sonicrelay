@@ -12,6 +12,22 @@ import {
 import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff, Headphones, HeadphoneOff } from "lucide-react";
 import type { ScreenShareSettings } from "~/lib/voice";
 
+// Bitrate targets by resolution and frame rate (must match SCREEN_BITRATES in voice.ts)
+const SCREEN_BITRATES: Record<string, number> = {
+  '720-30':  2_500_000,
+  '720-60':  4_000_000,
+  '1080-30': 4_000_000,
+  '1080-60': 8_000_000,
+  '1440-30': 6_000_000,
+  '1440-60': 12_000_000,
+};
+
+function formatBitrate(bps: number): string {
+  return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+}
+
+const keepOpen = (e: Event) => e.preventDefault();
+
 const DEFAULT_SETTINGS: ScreenShareSettings = {
   resolution: 1080,
   frameRate: 60,
@@ -92,15 +108,20 @@ export default function VoiceControls({
                 <ScreenShare className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="center" className="w-48">
+            <DropdownMenuContent side="top" align="center" className="w-56">
               <DropdownMenuLabel>Resolution</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 value={String(settings.resolution)}
                 onValueChange={(v) => updateSettings({ resolution: Number(v) as 720 | 1080 | 1440 })}
               >
-                <DropdownMenuRadioItem value="720">720p</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="1080">1080p</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="1440">1440p</DropdownMenuRadioItem>
+                {([720, 1080, 1440] as const).map((res) => (
+                  <DropdownMenuRadioItem key={res} value={String(res)} onSelect={keepOpen}>
+                    {res}p
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {formatBitrate(SCREEN_BITRATES[`${res}-${settings.frameRate}`])}
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
               </DropdownMenuRadioGroup>
 
               <DropdownMenuSeparator />
@@ -110,8 +131,14 @@ export default function VoiceControls({
                 value={String(settings.frameRate)}
                 onValueChange={(v) => updateSettings({ frameRate: Number(v) as 30 | 60 })}
               >
-                <DropdownMenuRadioItem value="30">30 FPS</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="60">60 FPS</DropdownMenuRadioItem>
+                {([30, 60] as const).map((fps) => (
+                  <DropdownMenuRadioItem key={fps} value={String(fps)} onSelect={keepOpen}>
+                    {fps} FPS
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {formatBitrate(SCREEN_BITRATES[`${settings.resolution}-${fps}`])}
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
               </DropdownMenuRadioGroup>
 
               <DropdownMenuSeparator />
@@ -121,8 +148,8 @@ export default function VoiceControls({
                 value={settings.contentHint}
                 onValueChange={(v) => updateSettings({ contentHint: v as 'motion' | 'detail' })}
               >
-                <DropdownMenuRadioItem value="motion">Motion (games)</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="detail">Sharpness (text)</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="motion" onSelect={keepOpen}>Motion (games)</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="detail" onSelect={keepOpen}>Sharpness (text)</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
 
               <DropdownMenuSeparator />

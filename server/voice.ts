@@ -10,7 +10,7 @@ const mediaCodecs: types.RouterRtpCodecCapability[] = [
     clockRate: 90000,
     parameters: {
       'packetization-mode': 1,
-      'profile-level-id': '42e01f',
+      'profile-level-id': '640033',
       'level-asymmetry-allowed': 1,
     },
   },
@@ -98,7 +98,7 @@ export async function createTransport(channelId: string, username: string, direc
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
-    initialAvailableOutgoingBitrate: 1_000_000,
+    initialAvailableOutgoingBitrate: 15_000_000,
   });
 
   if (direction === 'send') peer.sendTransport = transport;

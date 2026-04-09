@@ -257,7 +257,9 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
     if (msg.type === 'dm-delete-message') {
       const dm = DirectMessages.get((m: any) => m.__id === msg.messageId);
       if (!dm || dm.sender !== username) return;
-      for (const url of dm.attachments || []) {
+      for (const att of dm.attachments || []) {
+        let url = att;
+        try { url = JSON.parse(att).url; } catch {}
         const filePath = path.join(__dirname, url);
         fs.unlink(filePath, () => {});
       }

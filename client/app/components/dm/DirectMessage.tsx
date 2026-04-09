@@ -4,12 +4,12 @@ import { ShieldCheck, X, FileIcon, Trash2, ArrowDown, Reply, CornerUpLeft } from
 import Avatar from "~/components/ui/avatar";
 import MessageHeader from "~/components/ui/message-header";
 import MessageInput from "~/components/ui/message-input";
-import MessageAttachments from "~/components/text-channel/MessageAttachments";
+import EncryptedAttachments from "~/components/dm/EncryptedAttachments";
 import MessageContent from "~/components/text-channel/MessageContent";
 import MessageSkeletons from "~/components/text-channel/MessageSkeletons";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
 import { cn } from "~/lib/utils";
-import { importPublicKey, deriveSharedSecret, encrypt, decrypt } from "~/lib/crypto";
+import { importPublicKey, deriveSharedSecret, encrypt, decrypt, encryptFile } from "~/lib/crypto";
 import { getProtocol } from "~/lib/protocol";
 import { preloadAllMedia } from "~/lib/preload-media";
 import type { OgData } from "~/lib/preload-media";
@@ -109,7 +109,7 @@ export default function DirectMessage({
       });
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const cache = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
+      const cache = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
       setOgCache(cache);
       setMessages(decrypted);
       setHasMore(data.hasMore);
@@ -190,7 +190,7 @@ export default function DirectMessage({
       );
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const newOgEntries = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
+      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
 
       setOgCache((prev) => {
         const merged = new Map(prev);
@@ -302,7 +302,7 @@ export default function DirectMessage({
       );
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const newOgEntries = await preloadAllMedia(decrypted, protocol, serverIP, accessToken);
+      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
 
       flushSync(() => {
         setOgCache((prev) => {
@@ -356,19 +356,6 @@ export default function DirectMessage({
     });
   }, [messages, hasMore, partner, accessToken, serverIP, protocol, highlightMessage]);
 
-  const uploadFiles = async (files: File[]): Promise<string[]> => {
-    if (files.length === 0) return [];
-    const formData = new FormData();
-    for (const file of files) formData.append('files', file);
-    const res = await fetch(`${protocol}://${serverIP}/upload`, {
-      method: 'POST',
-      headers: { "access-token": accessToken },
-      body: formData,
-    });
-    const data = await res.json();
-    return data.urls;
-  };
-
   const sendMessage = useCallback(async () => {
     if (!input.trim() && pendingFiles.length === 0) return;
     if (!sharedKeyRef.current) return;
@@ -376,7 +363,23 @@ export default function DirectMessage({
 
     try {
       setUploading(true);
-      const attachments = await uploadFiles(pendingFiles);
+
+      // Encrypt and upload each file individually
+      const attachments: string[] = [];
+      for (const file of pendingFiles) {
+        const arrayBuffer = await file.arrayBuffer();
+        const { iv: fileIv, encrypted } = await encryptFile(sharedKeyRef.current, arrayBuffer);
+        const formData = new FormData();
+        formData.append('files', new Blob([encrypted]), 'encrypted.enc');
+        const res = await fetch(`${protocol}://${serverIP}/upload`, {
+          method: 'POST',
+          headers: { 'access-token': accessToken },
+          body: formData,
+        });
+        const data = await res.json();
+        attachments.push(JSON.stringify({ url: data.urls[0], iv: fileIv, name: file.name }));
+      }
+
       setUploading(false);
 
       const { iv, ciphertext } = await encrypt(sharedKeyRef.current, input);
@@ -508,8 +511,8 @@ export default function DirectMessage({
                         ogCache={ogCache}
                       />
                     )}
-                    {msg.attachments.length > 0 && (
-                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                    {msg.attachments.length > 0 && sharedKeyRef.current && (
+                      <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKeyRef.current} serverIP={serverIP} />
                     )}
                   </div>
                   <div className="flex gap-0.5 shrink-0 mt-1">

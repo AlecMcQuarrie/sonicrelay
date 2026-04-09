@@ -162,6 +162,18 @@ export async function encrypt(sharedKey: CryptoKey, plaintext: string): Promise<
   };
 }
 
+// --- AES-GCM File Encrypt/Decrypt (binary) ---
+
+export async function encryptFile(sharedKey: CryptoKey, data: ArrayBuffer): Promise<{ iv: string; encrypted: ArrayBuffer }> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sharedKey, data);
+  return { iv: arrayBufferToBase64(iv.buffer as ArrayBuffer), encrypted };
+}
+
+export async function decryptFile(sharedKey: CryptoKey, iv: string, data: ArrayBuffer): Promise<ArrayBuffer> {
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToArrayBuffer(iv) }, sharedKey, data);
+}
+
 export async function decrypt(sharedKey: CryptoKey, iv: string, ciphertext: string): Promise<string> {
   const decoder = new TextDecoder();
   const decrypted = await crypto.subtle.decrypt(
