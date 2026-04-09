@@ -31,7 +31,6 @@ const keepOpen = (e: Event) => e.preventDefault();
 const DEFAULT_SETTINGS: ScreenShareSettings = {
   resolution: 1080,
   frameRate: 60,
-  contentHint: 'motion',
 };
 
 function loadSettings(): ScreenShareSettings {
@@ -139,17 +138,6 @@ export default function VoiceControls({
                     </span>
                   </DropdownMenuRadioItem>
                 ))}
-              </DropdownMenuRadioGroup>
-
-              <DropdownMenuSeparator />
-
-              <DropdownMenuLabel>Optimize for</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={settings.contentHint}
-                onValueChange={(v) => updateSettings({ contentHint: v as 'motion' | 'detail' })}
-              >
-                <DropdownMenuRadioItem value="motion" onSelect={keepOpen}>Motion (games)</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="detail" onSelect={keepOpen}>Sharpness (text)</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
 
               <DropdownMenuSeparator />

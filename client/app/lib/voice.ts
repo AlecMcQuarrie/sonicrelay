@@ -4,7 +4,6 @@ import type { types } from 'mediasoup-client';
 export type ScreenShareSettings = {
   resolution: 720 | 1080 | 1440;
   frameRate: 30 | 60;
-  contentHint: 'motion' | 'detail';
 };
 
 // Bitrate targets by resolution and frame rate (matches Discord Nitro-tier quality)
@@ -162,8 +161,8 @@ export class VoiceClient {
       audio: {
         ...(preferredAudio && { deviceId: { exact: preferredAudio } }),
         autoGainControl: false,
-        echoCancellation: false,
-        noiseSuppression: false,
+        echoCancellation: true,
+        noiseSuppression: true,
       },
     });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
@@ -409,10 +408,8 @@ export class VoiceClient {
     });
     const screenTrack = this.screenStream.getVideoTracks()[0];
 
-    // Tell the encoder whether to prioritize framerate (motion) or sharpness (detail).
-    // 'motion' keeps 60fps under bandwidth pressure by reducing quality slightly.
-    // 'detail' keeps text crisp but drops framerate when constrained.
-    screenTrack.contentHint = settings.contentHint;
+    // Prioritize framerate — with our bitrate headroom, motion mode stays sharp for text too.
+    screenTrack.contentHint = 'motion';
 
     // Browser "Stop sharing" button closes the track — handle it
     screenTrack.onended = () => { this.stopScreenShare(); };
@@ -578,8 +575,8 @@ export class VoiceClient {
       audio: {
         ...(deviceId && { deviceId: { exact: deviceId } }),
         autoGainControl: false,
-        echoCancellation: false,
-        noiseSuppression: false,
+        echoCancellation: true,
+        noiseSuppression: true,
       },
     });
     const newTrack = stream.getAudioTracks()[0];
