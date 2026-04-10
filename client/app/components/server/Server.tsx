@@ -611,8 +611,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
 
   const channelSidebarStack = (
     <>
-      <div className="px-4 py-2 border-b font-bold text-center truncate shrink-0">
-        {serverName}
+      <div className="p-4 border-b font-bold text-center shrink-0 min-w-0">
+        <div className="truncate">{serverName}</div>
       </div>
       <ChannelSidebar
         channels={channels}
