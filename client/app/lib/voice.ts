@@ -155,15 +155,17 @@ export class VoiceClient {
       }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
     });
 
-    // Produce audio from microphone
+    // Produce audio from microphone.
+    // KNOWN ISSUE: Wave XLR (and likely other USB interfaces with their own mixer
+    // software) can have input gain silently lowered mid-session by Chromium's audio
+    // pipeline. Explicitly disabling autoGainControl/echoCancellation/noiseSuppression
+    // stopped the gain drop but broke screenshare audio (everyone heard themselves).
+    // Passing no processing constraints and letting Chromium use defaults is the
+    // least-bad state: the gain drop can still happen, but screenshare audio works.
+    // Revisit if a constraint combination fixes both, or lock gain in Wave Link.
     const preferredAudio = localStorage.getItem("preferredAudioDevice");
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        ...(preferredAudio && { deviceId: { exact: preferredAudio } }),
-        autoGainControl: false,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
+      audio: preferredAudio ? { deviceId: { exact: preferredAudio } } : true,
     });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
@@ -571,13 +573,9 @@ export class VoiceClient {
 
   async switchAudioDevice(deviceId: string) {
     if (!this.audioProducer || !this.sendTransport) return;
+    // See KNOWN ISSUE note in join() — same reasoning applies here.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        ...(deviceId && { deviceId: { exact: deviceId } }),
-        autoGainControl: false,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
     });
     const newTrack = stream.getAudioTracks()[0];
     await this.audioProducer.replaceTrack({ track: newTrack });
