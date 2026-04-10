@@ -274,6 +274,12 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
           return prev;
         });
       }
+      if (msg.type === 'user-key' && typeof msg.username === 'string' && typeof msg.publicKey === 'string') {
+        setPublicKeys((prev) => {
+          if (prev[msg.username] === msg.publicKey) return prev;
+          return { ...prev, [msg.username]: msg.publicKey };
+        });
+      }
       if (msg.type === 'voice-pings') {
         setPeerPings(msg.pings);
       }

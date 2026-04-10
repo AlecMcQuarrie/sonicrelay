@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { Users, type Role } from "../db";
 import { authenticate } from "../auth";
 import { upload } from "../upload";
+import { broadcastUserKey } from "../clients";
 
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
@@ -115,6 +116,7 @@ router.put("/me/encryption-keys", (req: Request, res: Response) => {
     (u as any).encryptedPrivateKey = encryptedPrivateKey;
     (u as any).pbkdfSalt = pbkdfSalt;
   }, (u) => u.username === auth.username);
+  broadcastUserKey(auth.username, publicKey);
   return res.sendStatus(200);
 });
 

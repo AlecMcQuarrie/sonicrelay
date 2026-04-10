@@ -52,6 +52,10 @@ export function broadcastPresence() {
   broadcastToAll({ type: 'presence', onlineUsers: getOnlineUsernames() });
 }
 
+export function broadcastUserKey(username: string, publicKey: string) {
+  broadcastToAll({ type: 'user-key', username, publicKey });
+}
+
 export function broadcastToAll(message: object) {
   const data = JSON.stringify(message);
   for (const [ws] of clients) {

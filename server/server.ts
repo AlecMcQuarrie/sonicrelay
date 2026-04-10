@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import * as voice from './voice';
 import { Users, Messages, DirectMessages, upsertDmConversation } from './db';
-import { clients, broadcastToAll, broadcastToVoiceChannel, broadcastPresence, getVoicePeers, getMutedUsers, getDeafenedUsers } from './clients';
+import { clients, broadcastToAll, broadcastToVoiceChannel, broadcastPresence, broadcastUserKey, getVoicePeers, getMutedUsers, getDeafenedUsers } from './clients';
 import authRoutes from './routes/auth';
 import channelRoutes from './routes/channels';
 import userRoutes from './routes/users';
@@ -123,6 +123,11 @@ wss.on('connection', (ws, req: RipV2IncomingMessage) => {
 
   // Notify all clients of updated online users
   broadcastPresence();
+
+  // Push this user's public key so already-online clients can DM them immediately
+  const userRecord = Users.get((u) => u.username === username);
+  const pubKey = (userRecord as any)?.publicKey;
+  if (pubKey) broadcastUserKey(username, pubKey);
 
   // Clean up on disconnect
   ws.on('close', () => {
