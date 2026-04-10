@@ -31,7 +31,19 @@ interface ServerProps {
 
 export default function Server({ connection, privateKey, isActive }: ServerProps) {
   const { serverId, serverName, serverIP, accessToken, username } = connection;
-  const manager = useConnectionManager();
+  // Destructure stable callbacks from the manager. The full context object
+  // changes identity whenever ANY manager state updates, so depending on
+  // `manager` itself in useEffect deps would cause infinite loops.
+  const {
+    claimVoice,
+    releaseVoice,
+    registerVoiceLeaveHandler,
+    unregisterVoiceLeaveHandler,
+    registerVoiceActions,
+    unregisterVoiceActions,
+    setUnreadCount,
+    setVoiceStatus,
+  } = useConnectionManager();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
@@ -330,7 +342,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const joinVoiceChannel = useCallback(async (channelId: string) => {
     if (voiceChannelId === channelId) return;
     // Global voice lock: ask any other server currently in voice to leave first.
-    await manager.claimVoice(serverId);
+    await claimVoice(serverId);
     if (voiceChannelId) await voiceRef.current?.leave();
     await voiceRef.current?.join(channelId, username);
     setVoiceChannelId(channelId);
@@ -354,7 +366,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         voiceRef.current?.setUserMuted(user, s.muted);
       }
     }, 500);
-  }, [voiceChannelId, username, manager, serverId]);
+  }, [voiceChannelId, username, claimVoice, serverId]);
 
   const leaveVoiceChannel = useCallback(async () => {
     await voiceRef.current?.leave();
@@ -366,20 +378,20 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     setScreenAudioUsers(new Set());
     setFocusedVideoUsers(new Set());
     // Mute/deafen state intentionally NOT reset — persisted via localStorage
-    manager.releaseVoice(serverId);
-  }, [manager, serverId]);
+    releaseVoice(serverId);
+  }, [releaseVoice, serverId]);
 
   // ─── Connection manager integration ────────────────────────────────────────
 
   // Register our leave handler so other servers can force us off voice when
   // they claim the global voice lock. Unregister on unmount (disconnect).
   useEffect(() => {
-    manager.registerVoiceLeaveHandler(serverId, leaveVoiceChannel);
+    registerVoiceLeaveHandler(serverId, leaveVoiceChannel);
     return () => {
-      manager.unregisterVoiceLeaveHandler(serverId);
-      manager.releaseVoice(serverId);
+      unregisterVoiceLeaveHandler(serverId);
+      releaseVoice(serverId);
     };
-  }, [manager, serverId, leaveVoiceChannel]);
+  }, [registerVoiceLeaveHandler, unregisterVoiceLeaveHandler, releaseVoice, serverId, leaveVoiceChannel]);
 
   // Aggregate this server's unread total and push it to the rail.
   const totalUnread = useMemo(
@@ -387,8 +399,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     [unreadCounts],
   );
   useEffect(() => {
-    manager.setUnreadCount(serverId, totalUnread);
-  }, [manager, serverId, totalUnread]);
+    setUnreadCount(serverId, totalUnread);
+  }, [setUnreadCount, serverId, totalUnread]);
 
   // Publish voice status + actions whenever we hold an active voice session.
   const currentVoiceChannelName = useMemo(
@@ -397,11 +409,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   );
   useEffect(() => {
     if (!voiceChannelId) {
-      manager.setVoiceStatus(serverId, null);
-      manager.unregisterVoiceActions(serverId);
+      setVoiceStatus(serverId, null);
+      unregisterVoiceActions(serverId);
       return;
     }
-    manager.setVoiceStatus(serverId, {
+    setVoiceStatus(serverId, {
       channelId: voiceChannelId,
       channelName: currentVoiceChannelName,
       isMuted,
@@ -410,7 +422,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       isScreenSharing,
     });
   }, [
-    manager,
+    setVoiceStatus,
+    unregisterVoiceActions,
     serverId,
     voiceChannelId,
     currentVoiceChannelName,
@@ -464,13 +477,13 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   // control this server's voice session from another server's view.
   useEffect(() => {
     if (!voiceChannelId) return;
-    manager.registerVoiceActions(serverId, {
+    registerVoiceActions(serverId, {
       toggleMute,
       toggleDeafen,
       toggleCamera,
       leave: leaveVoiceChannel,
     });
-  }, [manager, serverId, voiceChannelId, toggleMute, toggleDeafen, toggleCamera, leaveVoiceChannel]);
+  }, [registerVoiceActions, serverId, voiceChannelId, toggleMute, toggleDeafen, toggleCamera, leaveVoiceChannel]);
 
   const protocol = getProtocol(serverIP);
 
