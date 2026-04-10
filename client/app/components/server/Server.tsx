@@ -6,7 +6,9 @@ import TextChannel from "~/components/text-channel/TextChannel";
 import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
-import { ShieldAlert } from "lucide-react";
+import { ShieldAlert, Menu, Users } from "lucide-react";
+import { Sheet, SheetContent } from "~/components/ui/sheet";
+import { ServerRailContent } from "~/components/server-rail/ServerRail";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
 import { getProtocol, getWsProtocol } from "~/lib/protocol";
@@ -67,6 +69,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
+  const [leftSheetOpen, setLeftSheetOpen] = useState(false);
+  const [rightSheetOpen, setRightSheetOpen] = useState(false);
   const {
     selectedDmPartner, setSelectedDmPartner,
     dmConversations, setDmConversations,
@@ -340,6 +344,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   }, [serverIP, accessToken]);
 
   const joinVoiceChannel = useCallback(async (channelId: string) => {
+    setLeftSheetOpen(false);
     if (voiceChannelId === channelId) return;
     // Global voice lock: ask any other server currently in voice to leave first.
     await claimVoice(serverId);
@@ -389,9 +394,17 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     registerVoiceLeaveHandler(serverId, leaveVoiceChannel);
     return () => {
       unregisterVoiceLeaveHandler(serverId);
+      unregisterVoiceActions(serverId);
       releaseVoice(serverId);
     };
-  }, [registerVoiceLeaveHandler, unregisterVoiceLeaveHandler, releaseVoice, serverId, leaveVoiceChannel]);
+  }, [
+    registerVoiceLeaveHandler,
+    unregisterVoiceLeaveHandler,
+    unregisterVoiceActions,
+    releaseVoice,
+    serverId,
+    leaveVoiceChannel,
+  ]);
 
   // Aggregate this server's unread total and push it to the rail.
   const totalUnread = useMemo(
@@ -567,6 +580,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   }, [protocol, serverIP, accessToken]);
 
   const startDm = useCallback((partner: string) => {
+    setLeftSheetOpen(false);
+    setRightSheetOpen(false);
     startDmRaw(partner);
     setSelectedTextChannelId(null);
     clearUnread(partner);
@@ -576,6 +591,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   }, [startDmRaw, protocol, serverIP, accessToken, clearUnread]);
 
   const selectTextChannel = useCallback((channelId: string) => {
+    setLeftSheetOpen(false);
     setSelectedTextChannelId(channelId);
     setSelectedDmPartner(null);
     clearUnread(channelId);
@@ -587,153 +603,214 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
+  const mobileTitle = selectedDmPartner
+    ? `@ ${selectedDmPartner}`
+    : selectedTextChannel
+      ? `# ${selectedTextChannel.name}`
+      : serverName;
+
+  const channelSidebarStack = (
+    <>
+      <div className="px-4 py-2 border-b font-bold text-center truncate shrink-0">
+        {serverName}
+      </div>
+      <ChannelSidebar
+        channels={channels}
+        selectedTextChannelId={selectedTextChannelId}
+        unreadCounts={unreadCounts}
+        voiceChannelId={voiceChannelId}
+        voicePeers={voicePeers}
+        speakingUsers={speakingUsers}
+        peerPings={peerPings}
+        videoTracks={videoTracks}
+        screenTracks={screenTracks}
+        screenAudioUsers={screenAudioUsers}
+        focusedFeeds={focusedVideoUsers}
+        onSelectTextChannel={selectTextChannel}
+        dmConversations={dmConversations}
+        selectedDmPartner={selectedDmPartner}
+        onSelectDm={startDm}
+        profilePhotos={profilePhotos}
+        serverIP={serverIP}
+        screenAudioPeerSettings={screenAudioPeerSettings}
+        onScreenAudioVolume={handleScreenAudioVolume}
+        onScreenAudioMute={handleScreenAudioMute}
+        localUsername={username}
+        selfMutedUsers={selfMutedUsers}
+        deafenedUsers={deafenedUsers}
+        voicePeerSettings={voicePeerSettings}
+        onUserVolume={handleUserVolume}
+        onUserMute={handleUserMute}
+        onJoinVoiceChannel={joinVoiceChannel}
+        canCreateChannel={myRole !== 'member'}
+        onCreateChannel={createChannel}
+        onFocusVideo={(user) => {
+          setFocusedVideoUsers((prev) => {
+            const next = new Set(prev);
+            if (next.has(user)) next.delete(user);
+            else next.add(user);
+            return next;
+          });
+        }}
+      />
+      {currentVoiceChannel && (
+        <VoiceControls
+          channelName={currentVoiceChannel.name}
+          isMuted={isMuted}
+          isDeafened={isDeafened}
+          isCameraOn={isCameraOn}
+          isScreenSharing={isScreenSharing}
+          onToggleMute={toggleMute}
+          onToggleDeafen={toggleDeafen}
+          onToggleCamera={toggleCamera}
+          onStartScreenShare={startScreenShare}
+          onStopScreenShare={stopScreenShare}
+          onDisconnect={leaveVoiceChannel}
+        />
+      )}
+      <UserPanel
+        username={username}
+        serverIP={serverIP}
+        profilePhoto={profilePhotos[username]}
+        accessToken={accessToken}
+        onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
+        voiceRef={voiceRef}
+      />
+    </>
+  );
+
+  const userListSection = (
+    <UserList
+      users={allUsers}
+      onlineUsers={onlineUsers}
+      profilePhotos={profilePhotos}
+      serverIP={serverIP}
+      myUsername={username}
+      myRole={myRole}
+      userRoles={userRoles}
+      onBan={banUser}
+      onSetRole={setUserRole}
+      onStartDm={startDm}
+    />
+  );
+
   return (
     <div
       className="flex flex-1 min-h-0"
       style={{ display: isActive ? "flex" : "none" }}
     >
-      <div className="w-60 border-r flex flex-col h-full">
-        <div className="px-4 py-2 border-b font-bold text-center truncate">
-          {serverName}
-        </div>
-        <ChannelSidebar
-          channels={channels}
-          selectedTextChannelId={selectedTextChannelId}
-          unreadCounts={unreadCounts}
-          voiceChannelId={voiceChannelId}
-          voicePeers={voicePeers}
-          speakingUsers={speakingUsers}
-          peerPings={peerPings}
-          videoTracks={videoTracks}
-          screenTracks={screenTracks}
-          screenAudioUsers={screenAudioUsers}
-          focusedFeeds={focusedVideoUsers}
-          onSelectTextChannel={selectTextChannel}
-          dmConversations={dmConversations}
-          selectedDmPartner={selectedDmPartner}
-          onSelectDm={startDm}
-          profilePhotos={profilePhotos}
-          serverIP={serverIP}
-          screenAudioPeerSettings={screenAudioPeerSettings}
-          onScreenAudioVolume={handleScreenAudioVolume}
-          onScreenAudioMute={handleScreenAudioMute}
-          localUsername={username}
-          selfMutedUsers={selfMutedUsers}
-          deafenedUsers={deafenedUsers}
-          voicePeerSettings={voicePeerSettings}
-          onUserVolume={handleUserVolume}
-          onUserMute={handleUserMute}
-          onJoinVoiceChannel={joinVoiceChannel}
-          canCreateChannel={myRole !== 'member'}
-          onCreateChannel={createChannel}
-          onFocusVideo={(user) => {
-            setFocusedVideoUsers((prev) => {
-              const next = new Set(prev);
-              if (next.has(user)) next.delete(user);
-              else next.add(user);
-              return next;
-            });
-          }}
-        />
-        {currentVoiceChannel && (
-          <VoiceControls
-            channelName={currentVoiceChannel.name}
-            isMuted={isMuted}
-            isDeafened={isDeafened}
-            isCameraOn={isCameraOn}
-            isScreenSharing={isScreenSharing}
-            onToggleMute={toggleMute}
-            onToggleDeafen={toggleDeafen}
-            onToggleCamera={toggleCamera}
-            onStartScreenShare={startScreenShare}
-            onStopScreenShare={stopScreenShare}
-            onDisconnect={leaveVoiceChannel}
-          />
-        )}
-        <UserPanel
-          username={username}
-          serverIP={serverIP}
-          profilePhoto={profilePhotos[username]}
-          accessToken={accessToken}
-          onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
-          voiceRef={voiceRef}
-        />
+      <div className="hidden md:flex w-60 border-r flex-col h-full">
+        {channelSidebarStack}
       </div>
-      <div className="flex-1 relative overflow-hidden">
-        {selectedDmPartner ? (
-          privateKey && publicKeys[selectedDmPartner] ? (
-            <DirectMessage
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="lg:hidden flex items-center gap-2 px-2 py-2 border-b shrink-0">
+          <button
+            onClick={() => setLeftSheetOpen(true)}
+            className="md:hidden p-2 rounded-md hover:bg-accent text-foreground"
+            aria-label="Open channels"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <span className="md:hidden flex-1 min-w-0 truncate font-bold text-center">
+            {mobileTitle}
+          </span>
+          <div className="hidden md:block flex-1" />
+          <button
+            onClick={() => setRightSheetOpen(true)}
+            className="p-2 rounded-md hover:bg-accent text-foreground"
+            aria-label="Open members"
+          >
+            <Users className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 relative overflow-hidden">
+          {selectedDmPartner ? (
+            privateKey && publicKeys[selectedDmPartner] ? (
+              <DirectMessage
+                serverIP={serverIP}
+                partner={selectedDmPartner}
+                accessToken={accessToken}
+                username={username}
+                wsRef={wsRef}
+                profilePhotos={profilePhotos}
+                privateKey={privateKey}
+                partnerPublicKey={publicKeys[selectedDmPartner]}
+              />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
+                <ShieldAlert className="w-8 h-8" />
+                <p className="text-sm font-medium">{selectedDmPartner} hasn't set up encryption yet</p>
+                <p className="text-xs">They need to log in again to enable direct messages.</p>
+              </div>
+            )
+          ) : selectedTextChannel ? (
+            <TextChannel
               serverIP={serverIP}
-              partner={selectedDmPartner}
+              channelId={selectedTextChannel.__id}
+              channelName={selectedTextChannel.name}
               accessToken={accessToken}
               username={username}
               wsRef={wsRef}
               profilePhotos={profilePhotos}
-              privateKey={privateKey}
-              partnerPublicKey={publicKeys[selectedDmPartner]}
+              myRole={myRole}
+              onStartDm={startDm}
             />
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
-              <ShieldAlert className="w-8 h-8" />
-              <p className="text-sm font-medium">{selectedDmPartner} hasn't set up encryption yet</p>
-              <p className="text-xs">They need to log in again to enable direct messages.</p>
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              Select a channel
             </div>
-          )
-        ) : selectedTextChannel ? (
-          <TextChannel
-            serverIP={serverIP}
-            channelId={selectedTextChannel.__id}
-            channelName={selectedTextChannel.name}
-            accessToken={accessToken}
-            username={username}
-            wsRef={wsRef}
-            profilePhotos={profilePhotos}
-            myRole={myRole}
-            onStartDm={startDm}
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
-            Select a channel
-          </div>
-        )}
-        {isActive && focusedVideoUsers.size > 0 && (() => {
-          const focusedTracks = new Map<string, MediaStreamTrack>();
-          for (const key of focusedVideoUsers) {
-            const [source, user] = key.split(':');
-            const trackMap = source === 'screen' ? screenTracks : videoTracks;
-            const track = trackMap.get(user);
-            if (track) focusedTracks.set(key, track);
-          }
-          if (focusedTracks.size === 0) return null;
-          return (
-            <FocusedVideo
-              videoTracks={focusedTracks}
-              onRemove={(user) => {
-                setFocusedVideoUsers((prev) => {
-                  const next = new Set(prev);
-                  next.delete(user);
-                  return next;
-                });
-              }}
-              onCloseAll={() => setFocusedVideoUsers(new Set())}
-            />
-          );
-        })()}
+          )}
+          {isActive && focusedVideoUsers.size > 0 && (() => {
+            const focusedTracks = new Map<string, MediaStreamTrack>();
+            for (const key of focusedVideoUsers) {
+              const [source, user] = key.split(':');
+              const trackMap = source === 'screen' ? screenTracks : videoTracks;
+              const track = trackMap.get(user);
+              if (track) focusedTracks.set(key, track);
+            }
+            if (focusedTracks.size === 0) return null;
+            return (
+              <FocusedVideo
+                videoTracks={focusedTracks}
+                onRemove={(user) => {
+                  setFocusedVideoUsers((prev) => {
+                    const next = new Set(prev);
+                    next.delete(user);
+                    return next;
+                  });
+                }}
+                onCloseAll={() => setFocusedVideoUsers(new Set())}
+              />
+            );
+          })()}
+        </div>
       </div>
-      <div className="w-52 border-l h-full">
-        <UserList
-          users={allUsers}
-          onlineUsers={onlineUsers}
-          profilePhotos={profilePhotos}
-          serverIP={serverIP}
-          myUsername={username}
-          myRole={myRole}
-          userRoles={userRoles}
-          onBan={banUser}
-          onSetRole={setUserRole}
-          onStartDm={startDm}
-        />
+      <div className="hidden lg:block w-52 border-l h-full">
+        {userListSection}
       </div>
+      {isActive && (
+        <Sheet open={leftSheetOpen} onOpenChange={setLeftSheetOpen}>
+          <SheetContent side="left" className="w-80 p-0" title="Servers and channels">
+            <div className="flex flex-col h-full">
+              <div className="flex gap-2 px-3 py-3 overflow-x-auto border-b shrink-0">
+                <ServerRailContent onAfterSelect={() => setLeftSheetOpen(false)} />
+              </div>
+              <div className="flex flex-col flex-1 min-h-0">
+                {channelSidebarStack}
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
+      {isActive && (
+        <Sheet open={rightSheetOpen} onOpenChange={setRightSheetOpen}>
+          <SheetContent side="right" className="w-64 p-0" title="Members">
+            <div className="h-full">
+              {userListSection}
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   );
 }
