@@ -367,7 +367,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   }, [messages, hasMore, channelId, accessToken, serverIP, protocol, highlightMessage]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0">
       {/* Channel header */}
       <MessageHeader># {channelName}</MessageHeader>
 

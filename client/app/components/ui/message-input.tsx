@@ -38,7 +38,7 @@ export default function MessageInput({
 
   return (
     <div className="p-4">
-      <div className="flex items-center gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
+      <div className="flex items-center gap-1 rounded-md border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring min-w-0">
         <textarea
           ref={textareaRef}
           placeholder={placeholder}
@@ -66,7 +66,8 @@ export default function MessageInput({
             }
           }}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none"
+          cols={1}
+          className="flex-1 min-w-0 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none"
         />
         {onAttachClick && (
           <button

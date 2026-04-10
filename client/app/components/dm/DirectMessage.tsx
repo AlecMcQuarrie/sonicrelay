@@ -419,7 +419,7 @@ export default function DirectMessage({
 
   if (initialLoading) {
     return (
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full min-w-0">
         <MessageHeader>
           <Avatar username={partner} profilePhoto={partnerPhotoUrl} size="sm" />
           {partner}
@@ -432,7 +432,7 @@ export default function DirectMessage({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0">
       {/* Header */}
       <MessageHeader>
         <Avatar username={partner} profilePhoto={partnerPhotoUrl} size="sm" />

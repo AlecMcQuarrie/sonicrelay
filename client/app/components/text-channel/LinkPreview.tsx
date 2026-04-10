@@ -47,7 +47,7 @@ export default function LinkPreview({ url, serverIP, accessToken, cachedOg }: Li
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="block max-w-md mt-1 rounded-lg border bg-muted/50 overflow-hidden hover:bg-muted/80 transition-colors no-underline text-inherit"
+      className="block max-w-[min(28rem,100%)] mt-1 rounded-lg border bg-muted/50 overflow-hidden hover:bg-muted/80 transition-colors no-underline text-inherit"
     >
       {ytMatch ? (
         <div className="relative aspect-video w-full">

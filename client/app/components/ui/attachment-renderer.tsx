@@ -16,7 +16,7 @@ export default function AttachmentRenderer({ src, filename }: AttachmentRenderer
         <img
           src={src}
           alt={filename}
-          className="max-w-xs max-h-60 rounded border object-contain cursor-pointer hover:opacity-90 transition-opacity"
+          className="max-w-[min(20rem,100%)] max-h-60 rounded border object-contain cursor-pointer hover:opacity-90 transition-opacity"
         />
       </a>
     );
@@ -24,7 +24,7 @@ export default function AttachmentRenderer({ src, filename }: AttachmentRenderer
 
   if (VIDEO_EXTS.includes(ext)) {
     return (
-      <div className="max-w-sm aspect-video">
+      <div className="max-w-[min(24rem,100%)] aspect-video">
         <video controls className="w-full h-full rounded border object-contain bg-black">
           <source src={src} type={getMimeType(filename)} />
         </video>
