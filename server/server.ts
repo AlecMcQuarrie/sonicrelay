@@ -19,7 +19,7 @@ import { loadServerConfig } from './config';
 const jwt = require("jsonwebtoken");
 const cors = require('cors');
 
-type RipV2IncomingMessage = IncomingMessage & {
+type SonicRelayIncomingMessage = IncomingMessage & {
   username?: string;
 };
 
@@ -33,7 +33,7 @@ app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Health check
-app.get("/health", (_req, res) => res.send("RipV2 server running"));
+app.get("/health", (_req, res) => res.send("SonicRelay server running"));
 
 // Routes
 app.use(serverInfoRoutes);
@@ -48,13 +48,13 @@ app.use(readStatusRoutes);
 const config = loadServerConfig();
 const server = app.listen(port, async () => {
   await voice.init();
-  console.log(`RipV2 server "${config.serverName}" (${config.serverId}) started at http://localhost:${port}`);
+  console.log(`SonicRelay server "${config.serverName}" (${config.serverId}) started at http://localhost:${port}`);
 });
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 
 const wss = new WebSocketServer({
-  server, verifyClient: (info: { req: RipV2IncomingMessage }, authenticate) => {
+  server, verifyClient: (info: { req: SonicRelayIncomingMessage }, authenticate) => {
     try {
       const url = new URL(info.req.url || "", `http://${info.req.headers.host}`);
       const accessToken = info.req.headers["access-token"] || url.searchParams.get("token");
@@ -111,7 +111,7 @@ const pingInterval = setInterval(() => {
 
 wss.on('close', () => clearInterval(pingInterval));
 
-wss.on('connection', (ws, req: RipV2IncomingMessage) => {
+wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
   const username = req.username!;
   (ws as any).isAlive = true;
   ws.on('pong', () => {

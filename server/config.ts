@@ -22,7 +22,7 @@ export function loadServerConfig(): ServerConfig {
 
   const fresh: ServerConfig = {
     serverId: crypto.randomUUID(),
-    serverName: process.env.SERVER_NAME || 'Ripcord Server',
+    serverName: process.env.SERVER_NAME || 'SonicRelay Server',
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(fresh, null, 2));
   cached = fresh;

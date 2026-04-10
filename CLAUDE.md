@@ -1,4 +1,4 @@
-# RipV2 (Ripcord)
+# SonicRelay
 
 A decentralized Discord alternative built from scratch. Text channels, voice channels, screen sharing — fully self-hosted and community-owned.
 
@@ -14,7 +14,7 @@ Anyone can download a packaged server and client, spin up their own instance, an
 ## Architecture
 
 ```
-ripv2/
+SonicRelay/
 ├── client/          # React frontend (Vite + React Router)
 └── server/          # Express.js backend (single process)
 ```

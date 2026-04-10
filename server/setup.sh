@@ -2,7 +2,7 @@
 set -e
 
 echo "========================================="
-echo "  RipV2 Server Setup"
+echo "  SonicRelay Server Setup"
 echo "========================================="
 echo ""
 
@@ -147,8 +147,8 @@ PORT_VAL=${PORT_VAL:-3000}
 if command -v ufw &> /dev/null; then
   echo "Configuring UFW firewall..."
   sudo ufw allow 22/tcp comment "SSH"
-  sudo ufw allow "$PORT_VAL"/tcp comment "RipV2 server"
-  sudo ufw allow 10000:10100/udp comment "RipV2 mediasoup WebRTC"
+  sudo ufw allow "$PORT_VAL"/tcp comment "SonicRelay server"
+  sudo ufw allow 10000:10100/udp comment "SonicRelay mediasoup WebRTC"
   sudo ufw --force enable
   echo "Firewall rules added."
 elif command -v firewall-cmd &> /dev/null; then
