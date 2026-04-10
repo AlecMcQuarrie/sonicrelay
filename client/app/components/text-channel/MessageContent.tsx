@@ -38,8 +38,8 @@ export default function MessageContent({ text, serverIP, accessToken, ogCache }:
   const uniqueUrls = [...new Set(urls)];
 
   return (
-    <div>
-      <p className="whitespace-pre-wrap break-words">
+    <div className="min-w-0">
+      <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
         {parts.map((part) =>
           typeof part === "string" ? (
             part
@@ -49,7 +49,7 @@ export default function MessageContent({ text, serverIP, accessToken, ogCache }:
               href={part.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 hover:underline"
+              className="text-blue-400 hover:underline [overflow-wrap:anywhere]"
             >
               {part.url}
             </a>

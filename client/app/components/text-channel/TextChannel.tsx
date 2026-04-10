@@ -369,7 +369,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   return (
     <div className="flex flex-col h-full min-w-0">
       {/* Channel header */}
-      <MessageHeader># {channelName}</MessageHeader>
+      <MessageHeader><span className="truncate min-w-0"># {channelName}</span></MessageHeader>
 
       {/* Messages — column-reverse keeps viewport anchored to bottom */}
       {initialLoading ? (
