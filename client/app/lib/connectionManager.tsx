@@ -63,6 +63,7 @@ const CONNECTIONS_KEY = "servers";
 const ACTIVE_KEY = "activeServerId";
 
 function loadConnectionsFromStorage(): StoredConnection[] {
+  if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(CONNECTIONS_KEY);
     if (!raw) return [];
@@ -75,10 +76,12 @@ function loadConnectionsFromStorage(): StoredConnection[] {
 }
 
 function loadActiveFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
   return localStorage.getItem(ACTIVE_KEY);
 }
 
 function persistConnections(connections: StoredConnection[]) {
+  if (typeof window === "undefined") return;
   const map: Record<string, StoredConnection> = {};
   for (const c of connections) map[c.serverId] = c;
   localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(map));
