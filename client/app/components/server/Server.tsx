@@ -90,10 +90,35 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   selectedDmPartnerRef.current = selectedDmPartner;
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
+  const windowFocusedRef = useRef(
+    typeof document !== "undefined"
+      ? document.visibilityState === "visible" && document.hasFocus()
+      : true,
+  );
+  const readDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const didAutoSelectRef = useRef(false);
+
+  const protocol = getProtocol(serverIP);
+
+  // Debounced read-marker update. Clears the local unread count immediately
+  // for a snappy UI, then schedules a single trailing PUT per target so a
+  // burst of incoming messages collapses into one server write.
+  const markRead = useCallback((targetId: string) => {
+    clearUnread(targetId);
+    const timers = readDebounceRef.current;
+    const existing = timers.get(targetId);
+    if (existing) clearTimeout(existing);
+    const handle = setTimeout(() => {
+      timers.delete(targetId);
+      fetch(`${protocol}://${serverIP}/read/${targetId}`, {
+        method: 'PUT', headers: { 'access-token': accessToken },
+      }).catch(() => {});
+    }, 500);
+    timers.set(targetId, handle);
+  }, [protocol, serverIP, accessToken, clearUnread]);
 
   // Fetch channels and set up WebSocket
   useEffect(() => {
-    const protocol = getProtocol(serverIP);
     const wsProtocol = getWsProtocol(serverIP);
 
     fetch(`${protocol}://${serverIP}/channels`, {
@@ -103,7 +128,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       .then((data) => {
         setChannels(data.channels);
         const firstText = data.channels.find((c: Channel) => c.type === "text");
-        if (firstText) setSelectedTextChannelId(firstText.__id);
+        if (firstText && !didAutoSelectRef.current) {
+          didAutoSelectRef.current = true;
+          setSelectedTextChannelId(firstText.__id);
+          markRead(firstText.__id);
+        }
       });
 
     fetch(`${protocol}://${serverIP}/users`, {
@@ -306,7 +335,12 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         if (msg.username === username) setMyRole(msg.role);
       }
       if (msg.type === 'text-message' && msg.sender !== username) {
-        if (msg.channelId !== selectedTextChannelIdRef.current) {
+        const activelyViewing =
+          msg.channelId === selectedTextChannelIdRef.current &&
+          windowFocusedRef.current;
+        if (activelyViewing) {
+          markRead(msg.channelId);
+        } else {
           incrementUnread(msg.channelId);
           const ch = channelsRef.current.find((c) => c.__id === msg.channelId);
           notify(`#${ch?.name ?? 'channel'}`, `${msg.sender}: ${msg.messageContent}`);
@@ -315,9 +349,15 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       if (msg.type === 'dm-message') {
         handleIncomingDm(msg);
         const partner = msg.sender === username ? msg.recipient : msg.sender;
-        if (msg.sender !== username && partner !== selectedDmPartnerRef.current) {
-          incrementUnread(partner);
-          notify(`DM from ${msg.sender}`, 'New message');
+        if (msg.sender !== username) {
+          const activelyViewing =
+            partner === selectedDmPartnerRef.current && windowFocusedRef.current;
+          if (activelyViewing) {
+            markRead(partner);
+          } else {
+            incrementUnread(partner);
+            notify(`DM from ${msg.sender}`, 'New message');
+          }
         }
       }
       if (msg.type === 'user-banned') {
@@ -415,6 +455,42 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     setUnreadCount(serverId, totalUnread);
   }, [setUnreadCount, serverId, totalUnread]);
 
+  // Track window focus/visibility. A channel is considered "actively viewed"
+  // only when it's selected AND the window is focused — so blurred-but-on-
+  // general should still notify, and refocusing should clear unreads that
+  // piled up while away.
+  useEffect(() => {
+    const update = () => {
+      const focused =
+        document.visibilityState === "visible" && document.hasFocus();
+      const wasFocused = windowFocusedRef.current;
+      windowFocusedRef.current = focused;
+      if (focused && !wasFocused) {
+        const channelId = selectedTextChannelIdRef.current;
+        const partner = selectedDmPartnerRef.current;
+        if (channelId) markRead(channelId);
+        else if (partner) markRead(partner);
+      }
+    };
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+    };
+  }, [markRead]);
+
+  // Flush any pending debounced read PUTs on unmount (server disconnect).
+  useEffect(() => {
+    const timers = readDebounceRef.current;
+    return () => {
+      for (const handle of timers.values()) clearTimeout(handle);
+      timers.clear();
+    };
+  }, []);
+
   // Publish voice status + actions whenever we hold an active voice session.
   const currentVoiceChannelName = useMemo(
     () => channels.find((c) => c.__id === voiceChannelId)?.name ?? "",
@@ -497,8 +573,6 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       leave: leaveVoiceChannel,
     });
   }, [registerVoiceActions, serverId, voiceChannelId, toggleMute, toggleDeafen, toggleCamera, leaveVoiceChannel]);
-
-  const protocol = getProtocol(serverIP);
 
   const saveVoicePeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
     fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
@@ -584,21 +658,15 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     setRightSheetOpen(false);
     startDmRaw(partner);
     setSelectedTextChannelId(null);
-    clearUnread(partner);
-    fetch(`${protocol}://${serverIP}/read/${partner}`, {
-      method: 'PUT', headers: { 'access-token': accessToken },
-    });
-  }, [startDmRaw, protocol, serverIP, accessToken, clearUnread]);
+    markRead(partner);
+  }, [startDmRaw, markRead]);
 
   const selectTextChannel = useCallback((channelId: string) => {
     setLeftSheetOpen(false);
     setSelectedTextChannelId(channelId);
     setSelectedDmPartner(null);
-    clearUnread(channelId);
-    fetch(`${protocol}://${serverIP}/read/${channelId}`, {
-      method: 'PUT', headers: { 'access-token': accessToken },
-    });
-  }, [protocol, serverIP, accessToken, clearUnread]);
+    markRead(channelId);
+  }, [markRead, setSelectedDmPartner]);
 
   const selectedTextChannel = channels.find((c) => c.__id === selectedTextChannelId);
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
