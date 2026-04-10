@@ -16,7 +16,7 @@ interface ScreenAudioControlsProps {
 
 export default function ScreenAudioControls({ username, setting, disabled, onVolume, onMute }: ScreenAudioControlsProps) {
   const [muted, setMuted] = useState(setting.muted);
-  const [volume, setVolume] = useState(setting.volume);
+  const [volume, setVolume] = useState(Math.min(1, setting.volume));
 
   return (
     <div className="p-2 space-y-2 min-w-[160px]" onClick={(e) => e.stopPropagation()}>
@@ -38,7 +38,7 @@ export default function ScreenAudioControls({ username, setting, disabled, onVol
         <input
           type="range"
           min="0"
-          max="2"
+          max="1"
           step="0.05"
           value={volume}
           disabled={disabled}

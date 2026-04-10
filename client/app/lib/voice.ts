@@ -75,13 +75,6 @@ export class VoiceClient {
   private screenProducerIds = new Set<string>(); // producer IDs that are screen share video
   private screenAudioProducerIds = new Set<string>(); // producer IDs that are screen share audio
   private screenAudioElements = new Map<string, HTMLAudioElement>(); // username -> audio element
-  private userGainNodes = new Map<string, GainNode>(); // username -> gain node for volume > 100%
-  private screenAudioGainNodes = new Map<string, GainNode>(); // username -> gain node for screen audio
-  private mutedUserGains = new Map<string, number>(); // username -> gain value before mute
-  private mutedScreenGains = new Map<string, number>(); // username -> gain value before mute
-  private isDeafened = false;
-  private preDeafenUserGains = new Map<string, number>(); // username -> gain value before deafen
-  private preDeafenScreenGains = new Map<string, number>(); // username -> gain value before deafen
   private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen' | 'screen-audio'
   private ws: WebSocket;
   private channelId: string | null = null;
@@ -245,17 +238,6 @@ export class VoiceClient {
       this.screenAudioProducerIds.add(producerId);
       const audio = this.createAudioElement();
       audio.srcObject = new MediaStream([consumer.track]);
-      if (this.audioContext) {
-        // Use createMediaStreamSource (not createMediaElementSource) — the latter
-        // doesn't reliably route audio from MediaStream srcObject in Chrome/Electron.
-        const streamSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
-        const gainNode = this.audioContext.createGain();
-        streamSource.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-        this.screenAudioGainNodes.set(remoteUsername, gainNode);
-        if (this.isDeafened) gainNode.gain.value = 0;
-        audio.volume = 0; // Silence element; playback goes through Web Audio graph
-      }
       audio.play();
       this.screenAudioElements.set(remoteUsername, audio);
       this.handlers.onScreenAudioChange(remoteUsername, true);
@@ -265,15 +247,6 @@ export class VoiceClient {
     // Play the received mic audio
     const audio = this.createAudioElement();
     audio.srcObject = new MediaStream([consumer.track]);
-    if (remoteUsername && this.audioContext) {
-      const streamSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
-      const gainNode = this.audioContext.createGain();
-      streamSource.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
-      this.userGainNodes.set(remoteUsername, gainNode);
-      if (this.isDeafened) gainNode.gain.value = 0;
-      audio.volume = 0; // Silence element; playback goes through Web Audio graph
-    }
     audio.play();
     this.audioElements.set(producerId, audio);
     if (remoteUsername) this.userAudioElements.set(remoteUsername, audio);
@@ -302,7 +275,6 @@ export class VoiceClient {
       if (username) {
         const audio = this.screenAudioElements.get(username);
         if (audio) { audio.srcObject = null; this.screenAudioElements.delete(username); }
-        this.screenAudioGainNodes.delete(username);
         this.handlers.onScreenAudioChange(username, false);
       }
     } else if (this.screenProducerIds.has(producerId)) {
@@ -319,7 +291,6 @@ export class VoiceClient {
       }
       if (username) {
         this.userAudioElements.delete(username);
-        this.userGainNodes.delete(username);
         this.analysers.delete(username);
         this.speakingState.delete(username);
         this.handlers.onSpeakingChange(username, false);
@@ -429,7 +400,8 @@ export class VoiceClient {
         frameRate: { ideal: settings.frameRate, max: settings.frameRate },
       },
       audio: {
-        echoCancellation: true,
+        // Disable voice processing — this is game/media audio, not speech
+        echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
       },
@@ -540,9 +512,6 @@ export class VoiceClient {
     this.screenAudioProducerIds.clear();
     this.screenAudioElements.forEach((a) => { a.srcObject = null; });
     this.screenAudioElements.clear();
-    this.screenAudioGainNodes.clear();
-    this.mutedScreenGains.clear();
-    this.preDeafenScreenGains.clear();
     this.producerSources.clear();
 
     // Notify server, but don't let a dead WebSocket block cleanup
@@ -560,10 +529,6 @@ export class VoiceClient {
     this.audioElements.forEach((a) => { a.srcObject = null; });
     this.audioElements.clear();
     this.userAudioElements.clear();
-    this.userGainNodes.clear();
-    this.mutedUserGains.clear();
-    this.preDeafenUserGains.clear();
-    this.isDeafened = false;
     this.audioProducer = null;
     this.videoProducer = null;
     this.screenProducer = null;
@@ -585,57 +550,23 @@ export class VoiceClient {
   }
 
   setScreenAudioVolume(username: string, volume: number) {
-    const gain = this.screenAudioGainNodes.get(username);
-    if (gain) {
-      gain.gain.value = Math.max(0, Math.min(2, volume));
-    } else {
-      // Fallback: no GainNode (AudioContext unavailable), use element volume (caps at 1)
-      const audio = this.screenAudioElements.get(username);
-      if (audio) audio.volume = Math.max(0, Math.min(1, volume));
-    }
+    const audio = this.screenAudioElements.get(username);
+    if (audio) audio.volume = Math.max(0, Math.min(1, volume));
   }
 
   setScreenAudioMuted(username: string, muted: boolean) {
-    const gain = this.screenAudioGainNodes.get(username);
-    if (gain) {
-      if (muted) {
-        this.mutedScreenGains.set(username, gain.gain.value);
-        gain.gain.value = 0;
-      } else {
-        gain.gain.value = this.mutedScreenGains.get(username) ?? 1;
-        this.mutedScreenGains.delete(username);
-      }
-    } else {
-      const audio = this.screenAudioElements.get(username);
-      if (audio) audio.muted = muted;
-    }
+    const audio = this.screenAudioElements.get(username);
+    if (audio) audio.muted = muted;
   }
 
   setUserVolume(username: string, volume: number) {
-    const gain = this.userGainNodes.get(username);
-    if (gain) {
-      gain.gain.value = Math.max(0, Math.min(2, volume));
-    } else {
-      // Fallback: no GainNode (AudioContext unavailable), use element volume (caps at 1)
-      const audio = this.userAudioElements.get(username);
-      if (audio) audio.volume = Math.max(0, Math.min(1, volume));
-    }
+    const audio = this.userAudioElements.get(username);
+    if (audio) audio.volume = Math.max(0, Math.min(1, volume));
   }
 
   setUserMuted(username: string, muted: boolean) {
-    const gain = this.userGainNodes.get(username);
-    if (gain) {
-      if (muted) {
-        this.mutedUserGains.set(username, gain.gain.value);
-        gain.gain.value = 0;
-      } else {
-        gain.gain.value = this.mutedUserGains.get(username) ?? 1;
-        this.mutedUserGains.delete(username);
-      }
-    } else {
-      const audio = this.userAudioElements.get(username);
-      if (audio) audio.muted = muted;
-    }
+    const audio = this.userAudioElements.get(username);
+    if (audio) audio.muted = muted;
   }
 
   async switchAudioDevice(deviceId: string) {
@@ -690,27 +621,6 @@ export class VoiceClient {
   }
 
   setDeafened(deafened: boolean) {
-    this.isDeafened = deafened;
-    if (deafened) {
-      for (const [username, gain] of this.userGainNodes) {
-        this.preDeafenUserGains.set(username, gain.gain.value);
-        gain.gain.value = 0;
-      }
-      for (const [username, gain] of this.screenAudioGainNodes) {
-        this.preDeafenScreenGains.set(username, gain.gain.value);
-        gain.gain.value = 0;
-      }
-    } else {
-      for (const [username, gain] of this.userGainNodes) {
-        gain.gain.value = this.preDeafenUserGains.get(username) ?? 1;
-      }
-      for (const [username, gain] of this.screenAudioGainNodes) {
-        gain.gain.value = this.preDeafenScreenGains.get(username) ?? 1;
-      }
-      this.preDeafenUserGains.clear();
-      this.preDeafenScreenGains.clear();
-    }
-    // Fallback for elements without GainNodes
     for (const audio of this.audioElements.values()) {
       audio.muted = deafened;
     }
