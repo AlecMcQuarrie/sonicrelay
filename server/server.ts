@@ -13,6 +13,8 @@ import userRoutes from './routes/users';
 import dmRoutes from './routes/dm';
 import uploadRoutes from './routes/uploads';
 import readStatusRoutes from './routes/read-status';
+import serverInfoRoutes from './routes/server-info';
+import { loadServerConfig } from './config';
 
 const jwt = require("jsonwebtoken");
 const cors = require('cors');
@@ -34,6 +36,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.get("/health", (_req, res) => res.send("RipV2 server running"));
 
 // Routes
+app.use(serverInfoRoutes);
 app.use(authRoutes);
 app.use(channelRoutes);
 app.use(userRoutes);
@@ -42,9 +45,10 @@ app.use(uploadRoutes);
 app.use(readStatusRoutes);
 
 // Server start
+const config = loadServerConfig();
 const server = app.listen(port, async () => {
   await voice.init();
-  console.log(`RipV2 server started at http://localhost:${port}`);
+  console.log(`RipV2 server "${config.serverName}" (${config.serverId}) started at http://localhost:${port}`);
 });
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────

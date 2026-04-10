@@ -110,14 +110,18 @@ export async function unwrapPrivateKey(wrappedJson: string, wrappingKey: CryptoK
 }
 
 // --- Session Key Caching (survives page refresh and app restart) ---
+// Keys are stored per server under dm_private_key_{serverId}. Clients may be
+// connected to several servers simultaneously and each has its own keypair.
 
-export async function savePrivateKeyToSession(key: CryptoKey): Promise<void> {
+const PRIVATE_KEY_PREFIX = "dm_private_key_";
+
+export async function savePrivateKeyToSession(serverId: string, key: CryptoKey): Promise<void> {
   const pkcs8 = await crypto.subtle.exportKey("pkcs8", key);
-  localStorage.setItem("dm_private_key", arrayBufferToBase64(pkcs8));
+  localStorage.setItem(PRIVATE_KEY_PREFIX + serverId, arrayBufferToBase64(pkcs8));
 }
 
-export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
-  const stored = localStorage.getItem("dm_private_key");
+export async function loadPrivateKeyFromSession(serverId: string): Promise<CryptoKey | null> {
+  const stored = localStorage.getItem(PRIVATE_KEY_PREFIX + serverId);
   if (!stored) return null;
   try {
     return await crypto.subtle.importKey(
@@ -128,9 +132,13 @@ export async function loadPrivateKeyFromSession(): Promise<CryptoKey | null> {
       ["deriveKey"],
     );
   } catch {
-    localStorage.removeItem("dm_private_key");
+    localStorage.removeItem(PRIVATE_KEY_PREFIX + serverId);
     return null;
   }
+}
+
+export function clearPrivateKeyFromSession(serverId: string): void {
+  localStorage.removeItem(PRIVATE_KEY_PREFIX + serverId);
 }
 
 

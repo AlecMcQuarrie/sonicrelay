@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChannelSidebar from "~/components/channel-sidebar/ChannelSidebar";
 import DirectMessage from "~/components/dm/DirectMessage";
 import FocusedVideo from "~/components/focused-video/FocusedVideo";
@@ -7,12 +7,13 @@ import UserList from "~/components/user-list/UserList";
 import UserPanel from "~/components/user-panel/UserPanel";
 import VoiceControls from "~/components/voice-controls/VoiceControls";
 import { ShieldAlert } from "lucide-react";
-import UpdateBanner from "~/components/update-banner/UpdateBanner";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
 import { getProtocol, getWsProtocol } from "~/lib/protocol";
 import useDmState from "~/hooks/useDmState";
 import useNotifications from "~/hooks/useNotifications";
+import type { StoredConnection } from "~/lib/auth";
+import { useConnectionManager } from "~/lib/connectionManager";
 
 type Channel = {
   name: string;
@@ -23,13 +24,14 @@ type Channel = {
 type Role = 'superadmin' | 'admin' | 'member';
 
 interface ServerProps {
-  serverIP: string;
-  accessToken: string;
-  username: string;
+  connection: StoredConnection;
   privateKey: CryptoKey | null;
+  isActive: boolean;
 }
 
-export default function Server({ serverIP, accessToken, username, privateKey }: ServerProps) {
+export default function Server({ connection, privateKey, isActive }: ServerProps) {
+  const { serverId, serverName, serverIP, accessToken, username } = connection;
+  const manager = useConnectionManager();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
@@ -327,6 +329,8 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
 
   const joinVoiceChannel = useCallback(async (channelId: string) => {
     if (voiceChannelId === channelId) return;
+    // Global voice lock: ask any other server currently in voice to leave first.
+    await manager.claimVoice(serverId);
     if (voiceChannelId) await voiceRef.current?.leave();
     await voiceRef.current?.join(channelId, username);
     setVoiceChannelId(channelId);
@@ -350,7 +354,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
         voiceRef.current?.setUserMuted(user, s.muted);
       }
     }, 500);
-  }, [voiceChannelId, username]);
+  }, [voiceChannelId, username, manager, serverId]);
 
   const leaveVoiceChannel = useCallback(async () => {
     await voiceRef.current?.leave();
@@ -362,7 +366,59 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
     setScreenAudioUsers(new Set());
     setFocusedVideoUsers(new Set());
     // Mute/deafen state intentionally NOT reset — persisted via localStorage
-  }, []);
+    manager.releaseVoice(serverId);
+  }, [manager, serverId]);
+
+  // ─── Connection manager integration ────────────────────────────────────────
+
+  // Register our leave handler so other servers can force us off voice when
+  // they claim the global voice lock. Unregister on unmount (disconnect).
+  useEffect(() => {
+    manager.registerVoiceLeaveHandler(serverId, leaveVoiceChannel);
+    return () => {
+      manager.unregisterVoiceLeaveHandler(serverId);
+      manager.releaseVoice(serverId);
+    };
+  }, [manager, serverId, leaveVoiceChannel]);
+
+  // Aggregate this server's unread total and push it to the rail.
+  const totalUnread = useMemo(
+    () => Object.values(unreadCounts).reduce((a, b) => a + b, 0),
+    [unreadCounts],
+  );
+  useEffect(() => {
+    manager.setUnreadCount(serverId, totalUnread);
+  }, [manager, serverId, totalUnread]);
+
+  // Publish voice status + actions whenever we hold an active voice session.
+  const currentVoiceChannelName = useMemo(
+    () => channels.find((c) => c.__id === voiceChannelId)?.name ?? "",
+    [channels, voiceChannelId],
+  );
+  useEffect(() => {
+    if (!voiceChannelId) {
+      manager.setVoiceStatus(serverId, null);
+      manager.unregisterVoiceActions(serverId);
+      return;
+    }
+    manager.setVoiceStatus(serverId, {
+      channelId: voiceChannelId,
+      channelName: currentVoiceChannelName,
+      isMuted,
+      isDeafened,
+      isCameraOn,
+      isScreenSharing,
+    });
+  }, [
+    manager,
+    serverId,
+    voiceChannelId,
+    currentVoiceChannelName,
+    isMuted,
+    isDeafened,
+    isCameraOn,
+    isScreenSharing,
+  ]);
 
   const toggleMute = useCallback(() => {
     const muted = voiceRef.current?.toggleMute() ?? false;
@@ -403,6 +459,18 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const stopScreenShare = useCallback(async () => {
     await voiceRef.current?.stopScreenShare();
   }, []);
+
+  // Register voice actions with the manager so the CrossServerVoiceBar can
+  // control this server's voice session from another server's view.
+  useEffect(() => {
+    if (!voiceChannelId) return;
+    manager.registerVoiceActions(serverId, {
+      toggleMute,
+      toggleDeafen,
+      toggleCamera,
+      leave: leaveVoiceChannel,
+    });
+  }, [manager, serverId, voiceChannelId, toggleMute, toggleDeafen, toggleCamera, leaveVoiceChannel]);
 
   const protocol = getProtocol(serverIP);
 
@@ -507,14 +575,13 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
   const currentVoiceChannel = channels.find((c) => c.__id === voiceChannelId);
 
   return (
-    <div className="flex flex-col h-screen">
-      <UpdateBanner />
-      <div className="flex flex-1 min-h-0">
+    <div
+      className="flex flex-1 min-h-0"
+      style={{ display: isActive ? "flex" : "none" }}
+    >
       <div className="w-60 border-r flex flex-col h-full">
-        <div className="px-4 py-1 border-b font-bold text-center">
-          <span className="text-[32px]">[</span>
-          <span className="relative -top-[2px] px-1 text-2xl">SONICRELAY</span>
-          <span className="text-[32px]">]</span>
+        <div className="px-4 py-2 border-b font-bold text-center truncate">
+          {serverName}
         </div>
         <ChannelSidebar
           channels={channels}
@@ -616,7 +683,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
             Select a channel
           </div>
         )}
-        {focusedVideoUsers.size > 0 && (() => {
+        {isActive && focusedVideoUsers.size > 0 && (() => {
           const focusedTracks = new Map<string, MediaStreamTrack>();
           for (const key of focusedVideoUsers) {
             const [source, user] = key.split(':');
@@ -640,7 +707,7 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
           );
         })()}
       </div>
-      <div className="w-52 border-l h-screen">
+      <div className="w-52 border-l h-full">
         <UserList
           users={allUsers}
           onlineUsers={onlineUsers}
@@ -653,7 +720,6 @@ export default function Server({ serverIP, accessToken, username, privateKey }: 
           onSetRole={setUserRole}
           onStartDm={startDm}
         />
-      </div>
       </div>
     </div>
   );
