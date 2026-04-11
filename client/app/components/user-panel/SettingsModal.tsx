@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { useTheme } from "next-themes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Camera } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import PhotoCropModal from "./PhotoCropModal";
@@ -26,6 +28,7 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
   const [selectedOutput, setSelectedOutput] = useState(() => localStorage.getItem("preferredOutputDevice") || "");
   const [cropImage, setCropImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { theme, setTheme } = useTheme();
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
 
@@ -112,42 +115,67 @@ export default function SettingsModal({ open, onOpenChange, serverIP, accessToke
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Microphone</label>
-              <select
-                value={selectedAudio}
-                onChange={(e) => saveAudio(e.target.value)}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              <Select
+                value={selectedAudio || "default"}
+                onValueChange={(v) => saveAudio(v === "default" ? "" : v)}
               >
-                <option value="">Default</option>
-                {audioDevices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  {audioDevices.map((d) => (
+                    <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Playback Device</label>
-              <select
-                value={selectedOutput}
-                onChange={(e) => saveOutput(e.target.value)}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              <Select
+                value={selectedOutput || "default"}
+                onValueChange={(v) => saveOutput(v === "default" ? "" : v)}
               >
-                <option value="">Default</option>
-                {outputDevices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  {outputDevices.map((d) => (
+                    <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Camera</label>
-              <select
-                value={selectedVideo}
-                onChange={(e) => saveVideo(e.target.value)}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              <Select
+                value={selectedVideo || "default"}
+                onValueChange={(v) => saveVideo(v === "default" ? "" : v)}
               >
-                <option value="">Default</option>
-                {videoDevices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  {videoDevices.map((d) => (
+                    <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Theme</label>
+              <Select value={theme ?? "system"} onValueChange={setTheme}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="light">Light</SelectItem>
+                  <SelectItem value="dark">Dark</SelectItem>
+                  <SelectItem value="system">System</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <p className="text-xs text-muted-foreground text-center pt-2">v{__APP_VERSION__}</p>
           </div>

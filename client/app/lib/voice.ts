@@ -155,17 +155,12 @@ export class VoiceClient {
       }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
     });
 
-    // Produce audio from microphone.
-    // KNOWN ISSUE: Wave XLR (and likely other USB interfaces with their own mixer
-    // software) can have input gain silently lowered mid-session by Chromium's audio
-    // pipeline. Explicitly disabling autoGainControl/echoCancellation/noiseSuppression
-    // stopped the gain drop but broke screenshare audio (everyone heard themselves).
-    // Passing no processing constraints and letting Chromium use defaults is the
-    // least-bad state: the gain drop can still happen, but screenshare audio works.
-    // Revisit if a constraint combination fixes both, or lock gain in Wave Link.
+    // Produce audio from microphone
     const preferredAudio = localStorage.getItem("preferredAudioDevice");
+    // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
+    // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: preferredAudio ? { deviceId: { exact: preferredAudio } } : true,
+      audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
     });
     this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
@@ -401,12 +396,7 @@ export class VoiceClient {
         height: { ideal: height, max: height },
         frameRate: { ideal: settings.frameRate, max: settings.frameRate },
       },
-      audio: {
-        // Disable voice processing — this is game/media audio, not speech
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
+      audio: true,
     });
     const screenTrack = this.screenStream.getVideoTracks()[0];
 
@@ -573,9 +563,8 @@ export class VoiceClient {
 
   async switchAudioDevice(deviceId: string) {
     if (!this.audioProducer || !this.sendTransport) return;
-    // See KNOWN ISSUE note in join() — same reasoning applies here.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: { ...(deviceId && { deviceId: { exact: deviceId } }), autoGainControl: false },
     });
     const newTrack = stream.getAudioTracks()[0];
     await this.audioProducer.replaceTrack({ track: newTrack });

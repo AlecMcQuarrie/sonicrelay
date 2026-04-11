@@ -10,7 +10,6 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import { ThemeProvider } from "~/components/theme-provider/ThemeProvider"
-import { ModeToggle } from "~/components/mode-toggle/ModeToggle"
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", type: "image/png", href: "/SonicRelayLogo.png" },
@@ -42,9 +41,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
           enableSystem
           disableTransitionOnChange
         >
-          <div className="fixed bottom-4 right-4">
-            <ModeToggle/>
-          </div>
           {children}
         </ThemeProvider>
           <ScrollRestoration />
