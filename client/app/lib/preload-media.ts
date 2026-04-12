@@ -35,11 +35,12 @@ export async function preloadAllMedia(
   const ogCache = new Map<string, OgData>();
   const imagePromises: Promise<void>[] = [];
 
-  // Collect attachment image URLs
+  // Collect attachment image URLs. Upload URLs need the access token as a
+  // query param because the browser can't send custom headers on <img>.
   for (const msg of messages) {
     for (const att of msg.attachments || []) {
       if (IMAGE_EXTS.includes(getExt(att))) {
-        imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}`));
+        imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}?token=${encodeURIComponent(accessToken)}`));
       }
     }
   }

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Users } from "lucide-react";
 import UserRow from "./UserRow";
 import BanDialog from "./BanDialog";
-import { getProtocol } from "~/lib/protocol";
+import { buildUploadUrl } from "~/lib/protocol";
 
 type Role = 'superadmin' | 'admin' | 'member';
 
@@ -11,6 +11,7 @@ interface UserListProps {
   onlineUsers: Set<string>;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
+  accessToken: string;
   myUsername: string;
   myRole: Role;
   userRoles: Record<string, Role>;
@@ -20,10 +21,9 @@ interface UserListProps {
 }
 
 export default function UserList({
-  users, onlineUsers, profilePhotos, serverIP,
+  users, onlineUsers, profilePhotos, serverIP, accessToken,
   myUsername, myRole, userRoles, onBan, onSetRole, onStartDm,
 }: UserListProps) {
-  const protocol = getProtocol(serverIP);
   const [banTarget, setBanTarget] = useState<string | null>(null);
 
   const sorted = [...users].sort((a, b) => {
@@ -37,7 +37,7 @@ export default function UserList({
 
   const photoUrl = (username: string) => {
     const photo = profilePhotos[username];
-    return photo ? `${protocol}://${serverIP}${photo}` : null;
+    return photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
   };
 
   return (

@@ -11,6 +11,7 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, C
 import { cn } from "~/lib/utils";
 import { preloadAllMedia } from "~/lib/preload-media";
 import type { OgData } from "~/lib/preload-media";
+import { buildUploadUrl } from "~/lib/protocol";
 
 type Message = {
   __id?: string;
@@ -386,7 +387,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           )}
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
-            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            const photoUrl = photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
 
             // Resolve the reply target from loaded messages or cache
             const replyTarget = msg.replyToId
@@ -447,7 +448,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                       />
                     )}
                     {msg.attachments && msg.attachments.length > 0 && (
-                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} accessToken={accessToken} />
                     )}
                   </div>
                   <div className="flex gap-0.5 shrink-0 mt-1">

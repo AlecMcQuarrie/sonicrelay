@@ -2,6 +2,7 @@ import { useState, type RefObject } from "react";
 import { Settings } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import SettingsModal from "./SettingsModal";
+import { buildUploadUrl } from "~/lib/protocol";
 import type { VoiceClient } from "~/lib/voice";
 
 interface UserPanelProps {
@@ -15,8 +16,7 @@ interface UserPanelProps {
 
 export default function UserPanel({ username, serverIP, profilePhoto, accessToken, onProfilePhotoChange, voiceRef }: UserPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
-  const photoUrl = profilePhoto ? `${protocol}://${serverIP}${profilePhoto}` : null;
+  const photoUrl = profilePhoto ? buildUploadUrl(profilePhoto, serverIP, accessToken) : null;
 
   return (
     <>

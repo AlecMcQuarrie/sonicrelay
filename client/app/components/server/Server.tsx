@@ -700,6 +700,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         onSelectDm={startDm}
         profilePhotos={profilePhotos}
         serverIP={serverIP}
+        accessToken={accessToken}
         screenAudioPeerSettings={screenAudioPeerSettings}
         onScreenAudioVolume={handleScreenAudioVolume}
         onScreenAudioMute={handleScreenAudioMute}
@@ -753,6 +754,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       onlineUsers={onlineUsers}
       profilePhotos={profilePhotos}
       serverIP={serverIP}
+      accessToken={accessToken}
       myUsername={username}
       myRole={myRole}
       userRoles={userRoles}

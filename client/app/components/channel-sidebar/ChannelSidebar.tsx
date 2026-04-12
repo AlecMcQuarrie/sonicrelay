@@ -54,6 +54,7 @@ interface ChannelSidebarProps {
   onSelectDm: (partner: string) => void;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
+  accessToken: string;
 }
 
 function pingColor(ms: number): string {
@@ -188,6 +189,7 @@ export default function ChannelSidebar({
   onSelectDm,
   profilePhotos,
   serverIP,
+  accessToken,
 }: ChannelSidebarProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
@@ -280,6 +282,7 @@ export default function ChannelSidebar({
         onSelectDm={onSelectDm}
         profilePhotos={profilePhotos}
         serverIP={serverIP}
+        accessToken={accessToken}
         unreadCounts={unreadCounts}
       />
 

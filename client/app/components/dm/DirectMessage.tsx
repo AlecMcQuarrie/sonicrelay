@@ -10,7 +10,7 @@ import MessageSkeletons from "~/components/text-channel/MessageSkeletons";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
 import { cn } from "~/lib/utils";
 import { importPublicKey, deriveSharedSecret, encrypt, decrypt, encryptFile } from "~/lib/crypto";
-import { getProtocol } from "~/lib/protocol";
+import { getProtocol, buildUploadUrl } from "~/lib/protocol";
 import { preloadAllMedia } from "~/lib/preload-media";
 import type { OgData } from "~/lib/preload-media";
 
@@ -415,7 +415,7 @@ export default function DirectMessage({
   };
 
   const partnerPhoto = profilePhotos[partner];
-  const partnerPhotoUrl = partnerPhoto ? `${protocol}://${serverIP}${partnerPhoto}` : null;
+  const partnerPhotoUrl = partnerPhoto ? buildUploadUrl(partnerPhoto, serverIP, accessToken) : null;
 
   if (initialLoading) {
     return (
@@ -452,7 +452,7 @@ export default function DirectMessage({
           )}
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
-            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            const photoUrl = photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
 
             const replyTarget = msg.replyToId
               ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
@@ -512,7 +512,7 @@ export default function DirectMessage({
                       />
                     )}
                     {msg.attachments.length > 0 && sharedKeyRef.current && (
-                      <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKeyRef.current} serverIP={serverIP} />
+                      <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKeyRef.current} serverIP={serverIP} accessToken={accessToken} />
                     )}
                   </div>
                   <div className="flex gap-0.5 shrink-0 mt-1">
