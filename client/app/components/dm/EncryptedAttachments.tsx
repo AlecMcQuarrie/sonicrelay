@@ -11,6 +11,7 @@ interface EncryptedAttachmentsProps {
   attachments: string[];
   sharedKey: CryptoKey;
   serverIP: string;
+  accessToken: string;
 }
 
 function parseAttachment(raw: string): EncryptedAttachment | null {
@@ -21,7 +22,7 @@ function parseAttachment(raw: string): EncryptedAttachment | null {
   return null;
 }
 
-function DecryptedFile({ att, sharedKey, serverIP }: { att: EncryptedAttachment; sharedKey: CryptoKey; serverIP: string }) {
+function DecryptedFile({ att, sharedKey, serverIP, accessToken }: { att: EncryptedAttachment; sharedKey: CryptoKey; serverIP: string; accessToken: string }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const protocol = getProtocol(serverIP);
@@ -31,7 +32,9 @@ function DecryptedFile({ att, sharedKey, serverIP }: { att: EncryptedAttachment;
 
     async function load() {
       try {
-        const res = await fetch(`${protocol}://${serverIP}${att.url}`);
+        const res = await fetch(`${protocol}://${serverIP}${att.url}`, {
+          headers: { "access-token": accessToken },
+        });
         const encrypted = await res.arrayBuffer();
         const decrypted = await decryptFile(sharedKey, att.iv, encrypted);
         const url = URL.createObjectURL(new Blob([decrypted], { type: getMimeType(att.name) }));
@@ -44,7 +47,7 @@ function DecryptedFile({ att, sharedKey, serverIP }: { att: EncryptedAttachment;
     load();
 
     return () => { if (revoke) URL.revokeObjectURL(revoke); };
-  }, [att.url, att.iv, att.name]);
+  }, [att.url, att.iv, att.name, accessToken]);
 
   if (error) {
     return (
@@ -68,13 +71,13 @@ function DecryptedFile({ att, sharedKey, serverIP }: { att: EncryptedAttachment;
   return <AttachmentRenderer src={objectUrl} filename={att.name} />;
 }
 
-export default function EncryptedAttachments({ attachments, sharedKey, serverIP }: EncryptedAttachmentsProps) {
+export default function EncryptedAttachments({ attachments, sharedKey, serverIP, accessToken }: EncryptedAttachmentsProps) {
   return (
     <div className="flex flex-col gap-2 mt-1">
       {attachments.map((raw, i) => {
         const att = parseAttachment(raw);
         if (!att) return null;
-        return <DecryptedFile key={`${att.url}-${i}`} att={att} sharedKey={sharedKey} serverIP={serverIP} />;
+        return <DecryptedFile key={`${att.url}-${i}`} att={att} sharedKey={sharedKey} serverIP={serverIP} accessToken={accessToken} />;
       })}
     </div>
   );

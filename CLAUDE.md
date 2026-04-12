@@ -84,3 +84,4 @@ Server runs on port 3000 by default. Client proxies to it. The Server IP field i
 - `ENCRYPTION_KEY` — JWT signing secret
 - `SALT` — bcrypt salt rounds
 - `ANNOUNCED_IP` — mediasoup's public IP for WebRTC (use `127.0.0.1` for local dev, your public IP for production)
+- `ALLOWED_ORIGINS` — optional comma-separated CORS allowlist (e.g. `http://localhost:5173,https://chat.example.com`). When unset, any origin is reflected (safe because auth is header-based, not cookies).

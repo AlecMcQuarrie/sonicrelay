@@ -11,6 +11,7 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, C
 import { cn } from "~/lib/utils";
 import { preloadAllMedia } from "~/lib/preload-media";
 import type { OgData } from "~/lib/preload-media";
+import { buildUploadUrl } from "~/lib/protocol";
 
 type Message = {
   __id?: string;
@@ -27,6 +28,7 @@ interface TextChannelProps {
   channelId: string;
   channelName: string;
   accessToken: string;
+  uploadToken: string | null;
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
   profilePhotos: Record<string, string | null>;
@@ -34,7 +36,7 @@ interface TextChannelProps {
   onStartDm?: (username: string) => void;
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, username, wsRef, profilePhotos, myRole, onStartDm }: TextChannelProps) {
+export default function TextChannel({ serverIP, channelId, channelName, accessToken, uploadToken, username, wsRef, profilePhotos, myRole, onStartDm }: TextChannelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -70,7 +72,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     })
       .then((res) => res.json())
       .then(async (data) => {
-        const cache = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+        const cache = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
         setOgCache(cache);
         setMessages(data.messages);
         setHasMore(data.hasMore);
@@ -99,7 +101,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     const data = await res.json();
 
     // Preload all media in the older page before inserting
-    const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+    const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
 
     // Find the DOM element of the first currently-visible message to anchor to
     const firstMsgId = messages[0].__id;
@@ -305,7 +307,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       );
       const data = await res.json();
 
-      const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken);
+      const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
 
       flushSync(() => {
         setOgCache((prev) => {
@@ -386,7 +388,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
           )}
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
-            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
 
             // Resolve the reply target from loaded messages or cache
             const replyTarget = msg.replyToId
@@ -447,7 +449,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                       />
                     )}
                     {msg.attachments && msg.attachments.length > 0 && (
-                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} />
+                      <MessageAttachments attachments={msg.attachments} serverIP={serverIP} uploadToken={uploadToken} />
                     )}
                   </div>
                   <div className="flex gap-0.5 shrink-0 mt-1">

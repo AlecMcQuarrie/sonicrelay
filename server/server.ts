@@ -26,11 +26,26 @@ type SonicRelayIncomingMessage = IncomingMessage & {
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Reject attachment URLs that escape the uploads directory. Used both at
+// storage time (to keep bad data out of the DB) and at unlink time (defense
+// in depth against any bad data already stored).
+const uploadsDir = path.resolve(path.join(__dirname, 'uploads'));
+function isSafeUploadUrl(url: unknown): url is string {
+  if (typeof url !== 'string') return false;
+  const resolved = path.resolve(path.join(__dirname, url));
+  return resolved === uploadsDir || resolved.startsWith(uploadsDir + path.sep);
+}
+
 // Middleware
-app.use(cors({ origin: true }));
+// ALLOWED_ORIGINS is a comma-separated allowlist. When unset, we reflect any
+// origin — fine for this app because auth is header-based (no cookies), so a
+// malicious page can't piggyback on a user's session without the token.
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean);
+app.use(cors({ origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : true }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// NOTE: uploaded files are served by the authenticated GET /uploads/:filename
+// route in routes/uploads.ts — do not mount express.static here.
 
 // Health check
 app.get("/health", (_req, res) => res.send("SonicRelay server running"));
@@ -165,7 +180,7 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
 
     // ── Text message ──
     if (msg.type === 'text-message') {
-      const attachments: string[] = msg.attachments || [];
+      const attachments: string[] = (msg.attachments || []).filter(isSafeUploadUrl);
       const timestamp = new Date().toISOString();
       const replyToId = msg.replyToId || null;
       const stored = Messages.create({
@@ -202,6 +217,7 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
       const isAdmin = actor?.role === 'admin' || actor?.role === 'superadmin';
       if (!message || (message.sender !== username && !isAdmin)) return;
       for (const url of message.attachments || []) {
+        if (!isSafeUploadUrl(url)) continue;
         const filePath = path.join(__dirname, url);
         fs.unlink(filePath, () => {});
       }
@@ -225,7 +241,17 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
       const recipient = Users.get((u) => u.username === msg.recipient);
       if (!recipient || recipient.banned) return;
 
-      const attachments: string[] = Array.isArray(msg.attachments) ? msg.attachments.slice(0, 10) : [];
+      // DM attachments are JSON strings of shape {url, iv, name}. Validate
+      // the parsed url stays within the uploads dir; drop anything malformed.
+      const rawAttachments: unknown[] = Array.isArray(msg.attachments) ? msg.attachments.slice(0, 10) : [];
+      const attachments: string[] = [];
+      for (const a of rawAttachments) {
+        if (typeof a !== 'string') continue;
+        try {
+          const parsed = JSON.parse(a);
+          if (isSafeUploadUrl(parsed?.url)) attachments.push(a);
+        } catch { /* drop */ }
+      }
       const replyToId = typeof msg.replyToId === 'string' ? msg.replyToId : null;
 
       const conversationId = [username, msg.recipient].sort().join(':');
@@ -267,8 +293,9 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
       const dm = DirectMessages.get((m: any) => m.__id === msg.messageId);
       if (!dm || dm.sender !== username) return;
       for (const att of dm.attachments || []) {
-        let url = att;
+        let url: unknown = att;
         try { url = JSON.parse(att).url; } catch {}
+        if (!isSafeUploadUrl(url)) continue;
         const filePath = path.join(__dirname, url);
         fs.unlink(filePath, () => {});
       }

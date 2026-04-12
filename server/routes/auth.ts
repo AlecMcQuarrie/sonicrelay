@@ -32,6 +32,7 @@ router.post("/signup", async (req: Request, res: Response) => {
   };
   Users.create(user);
 
+  // Tokens intentionally have no expiry — see note on the login handler.
   const token = jwt.sign(
     { username: user.username },
     process.env.ENCRYPTION_KEY,
@@ -39,28 +40,28 @@ router.post("/signup", async (req: Request, res: Response) => {
   return res.status(200).json({ accessToken: token });
 });
 
+// Dummy bcrypt hash used when the username doesn't exist, so login timing
+// and response status don't reveal whether the account is real.
+const DUMMY_HASH = '$2b$12$abcdefghijklmnopqrstuuQ1ZsUQZKJbUeUcZqkQGZb6Y8pxS.xQnW';
+
 router.post("/login", async (req: Request, res: Response) => {
   const user = Users.get((x) => x.username === req.body.username);
-  if (!user) {
-    return res.sendStatus(404);
-  }
-
-  const compare = await bcrypt.compare(req.body.password, user.password);
-
-  if (compare) {
-    if (user.banned) return res.sendStatus(403);
-    const token = jwt.sign(
-      { username: user.username },
-      process.env.ENCRYPTION_KEY,
-    );
-    return res.status(200).json({
-      accessToken: token,
-      encryptedPrivateKey: (user as any).encryptedPrivateKey || null,
-      pbkdfSalt: (user as any).pbkdfSalt || null,
-    });
-  }
-
-  return res.sendStatus(401);
+  const hash = user ? user.password : DUMMY_HASH;
+  const ok = await bcrypt.compare(req.body.password || '', hash);
+  if (!ok || !user) return res.sendStatus(401);
+  if (user.banned) return res.sendStatus(403);
+  // Tokens intentionally have no expiry — ban and role changes take effect
+  // immediately because authenticate() re-reads user state from the DB on
+  // every request (see server/auth.ts).
+  const token = jwt.sign(
+    { username: user.username },
+    process.env.ENCRYPTION_KEY,
+  );
+  return res.status(200).json({
+    accessToken: token,
+    encryptedPrivateKey: (user as any).encryptedPrivateKey || null,
+    pbkdfSalt: (user as any).pbkdfSalt || null,
+  });
 });
 
 router.post("/me", (req: Request, res: Response) => {

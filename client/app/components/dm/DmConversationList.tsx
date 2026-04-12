@@ -1,7 +1,7 @@
 import { Button } from "~/components/ui/button";
 import Avatar from "~/components/ui/avatar";
 import UnreadBadge from "~/components/ui/unread-badge";
-import { getProtocol } from "~/lib/protocol";
+import { buildUploadUrl } from "~/lib/protocol";
 
 interface DmConversationListProps {
   conversations: { partner: string; lastTimestamp: string }[];
@@ -9,6 +9,7 @@ interface DmConversationListProps {
   onSelectDm: (partner: string) => void;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
+  uploadToken: string | null;
   unreadCounts: Record<string, number>;
 }
 
@@ -18,9 +19,9 @@ export default function DmConversationList({
   onSelectDm,
   profilePhotos,
   serverIP,
+  uploadToken,
   unreadCounts,
 }: DmConversationListProps) {
-  const protocol = getProtocol(serverIP);
 
   return (
     <>
@@ -33,7 +34,7 @@ export default function DmConversationList({
         ) : (
           conversations.map((conv) => {
             const photo = profilePhotos[conv.partner];
-            const photoUrl = photo ? `${protocol}://${serverIP}${photo}` : null;
+            const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
             return (
               <Button
                 key={conv.partner}
