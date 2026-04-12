@@ -69,6 +69,10 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
+  // Short-lived upload-scoped token used as ?token=... on image URLs so the
+  // long-lived session JWT never touches a URL (and therefore never ends up
+  // in access logs or browser history). Auto-refreshed below.
+  const [uploadToken, setUploadToken] = useState<string | null>(null);
   const [leftSheetOpen, setLeftSheetOpen] = useState(false);
   const [rightSheetOpen, setRightSheetOpen] = useState(false);
   const {
@@ -426,6 +430,45 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     releaseVoice(serverId);
   }, [releaseVoice, serverId]);
 
+  // ─── Upload token lifecycle ─────────────────────────────────────────────────
+
+  // Fetch a short-lived upload token and refresh it before it expires. Also
+  // re-fetch when the tab becomes visible again, to cover the long-sleep case
+  // (laptop closed for an hour, then reopened) where the interval timer has
+  // drifted and any in-flight image loads would otherwise 401.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function refresh() {
+      try {
+        const res = await fetch(`${protocol}://${serverIP}/upload-token`, {
+          method: 'POST',
+          headers: { 'access-token': accessToken },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setUploadToken(data.uploadToken);
+        // Refresh at 80% of TTL so we have a ~2 min buffer on a 10 min token.
+        const ttlMs = (data.expiresIn ?? 600) * 1000;
+        const refreshMs = Math.max(60_000, ttlMs * 0.8);
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(refresh, refreshMs);
+      } catch { /* will retry on next visibilitychange */ }
+    }
+
+    refresh();
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [protocol, serverIP, accessToken]);
+
   // ─── Connection manager integration ────────────────────────────────────────
 
   // Register our leave handler so other servers can force us off voice when
@@ -700,7 +743,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         onSelectDm={startDm}
         profilePhotos={profilePhotos}
         serverIP={serverIP}
-        accessToken={accessToken}
+        uploadToken={uploadToken}
         screenAudioPeerSettings={screenAudioPeerSettings}
         onScreenAudioVolume={handleScreenAudioVolume}
         onScreenAudioMute={handleScreenAudioMute}
@@ -742,6 +785,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         serverIP={serverIP}
         profilePhoto={profilePhotos[username]}
         accessToken={accessToken}
+        uploadToken={uploadToken}
         onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
         voiceRef={voiceRef}
       />
@@ -754,7 +798,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       onlineUsers={onlineUsers}
       profilePhotos={profilePhotos}
       serverIP={serverIP}
-      accessToken={accessToken}
+      uploadToken={uploadToken}
       myUsername={username}
       myRole={myRole}
       userRoles={userRoles}
@@ -800,6 +844,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
                 serverIP={serverIP}
                 partner={selectedDmPartner}
                 accessToken={accessToken}
+                uploadToken={uploadToken}
                 username={username}
                 wsRef={wsRef}
                 profilePhotos={profilePhotos}
@@ -819,6 +864,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
               channelId={selectedTextChannel.__id}
               channelName={selectedTextChannel.name}
               accessToken={accessToken}
+              uploadToken={uploadToken}
               username={username}
               wsRef={wsRef}
               profilePhotos={profilePhotos}

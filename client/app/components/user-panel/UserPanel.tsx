@@ -10,13 +10,14 @@ interface UserPanelProps {
   serverIP: string;
   profilePhoto?: string | null;
   accessToken: string;
+  uploadToken: string | null;
   onProfilePhotoChange: (url: string) => void;
   voiceRef: RefObject<VoiceClient | null>;
 }
 
-export default function UserPanel({ username, serverIP, profilePhoto, accessToken, onProfilePhotoChange, voiceRef }: UserPanelProps) {
+export default function UserPanel({ username, serverIP, profilePhoto, accessToken, uploadToken, onProfilePhotoChange, voiceRef }: UserPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const photoUrl = profilePhoto ? buildUploadUrl(profilePhoto, serverIP, accessToken) : null;
+  const photoUrl = profilePhoto && uploadToken ? buildUploadUrl(profilePhoto, serverIP, uploadToken) : null;
 
   return (
     <>

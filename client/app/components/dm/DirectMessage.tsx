@@ -27,6 +27,7 @@ interface DirectMessageProps {
   serverIP: string;
   partner: string;
   accessToken: string;
+  uploadToken: string | null;
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
   profilePhotos: Record<string, string | null>;
@@ -38,6 +39,7 @@ export default function DirectMessage({
   serverIP,
   partner,
   accessToken,
+  uploadToken,
   username,
   wsRef,
   profilePhotos,
@@ -109,7 +111,7 @@ export default function DirectMessage({
       });
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const cache = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
+      const cache = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
       setOgCache(cache);
       setMessages(decrypted);
       setHasMore(data.hasMore);
@@ -190,7 +192,7 @@ export default function DirectMessage({
       );
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
+      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
 
       setOgCache((prev) => {
         const merged = new Map(prev);
@@ -302,7 +304,7 @@ export default function DirectMessage({
       );
       const data = await res.json();
       const decrypted = await decryptMessages(data.messages, sharedKey);
-      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken);
+      const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
 
       flushSync(() => {
         setOgCache((prev) => {
@@ -415,7 +417,7 @@ export default function DirectMessage({
   };
 
   const partnerPhoto = profilePhotos[partner];
-  const partnerPhotoUrl = partnerPhoto ? buildUploadUrl(partnerPhoto, serverIP, accessToken) : null;
+  const partnerPhotoUrl = partnerPhoto && uploadToken ? buildUploadUrl(partnerPhoto, serverIP, uploadToken) : null;
 
   if (initialLoading) {
     return (
@@ -452,7 +454,7 @@ export default function DirectMessage({
           )}
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
-            const photoUrl = photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
+            const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
 
             const replyTarget = msg.replyToId
               ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null

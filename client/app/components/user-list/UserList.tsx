@@ -11,7 +11,7 @@ interface UserListProps {
   onlineUsers: Set<string>;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
-  accessToken: string;
+  uploadToken: string | null;
   myUsername: string;
   myRole: Role;
   userRoles: Record<string, Role>;
@@ -21,7 +21,7 @@ interface UserListProps {
 }
 
 export default function UserList({
-  users, onlineUsers, profilePhotos, serverIP, accessToken,
+  users, onlineUsers, profilePhotos, serverIP, uploadToken,
   myUsername, myRole, userRoles, onBan, onSetRole, onStartDm,
 }: UserListProps) {
   const [banTarget, setBanTarget] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export default function UserList({
 
   const photoUrl = (username: string) => {
     const photo = profilePhotos[username];
-    return photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
+    return photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
   };
 
   return (

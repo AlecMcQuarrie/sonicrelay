@@ -9,7 +9,7 @@ interface DmConversationListProps {
   onSelectDm: (partner: string) => void;
   profilePhotos: Record<string, string | null>;
   serverIP: string;
-  accessToken: string;
+  uploadToken: string | null;
   unreadCounts: Record<string, number>;
 }
 
@@ -19,7 +19,7 @@ export default function DmConversationList({
   onSelectDm,
   profilePhotos,
   serverIP,
-  accessToken,
+  uploadToken,
   unreadCounts,
 }: DmConversationListProps) {
 
@@ -34,7 +34,7 @@ export default function DmConversationList({
         ) : (
           conversations.map((conv) => {
             const photo = profilePhotos[conv.partner];
-            const photoUrl = photo ? buildUploadUrl(photo, serverIP, accessToken) : null;
+            const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
             return (
               <Button
                 key={conv.partner}

@@ -31,16 +31,21 @@ export async function preloadAllMedia(
   protocol: string,
   serverIP: string,
   accessToken: string,
+  uploadToken: string | null,
 ): Promise<Map<string, OgData>> {
   const ogCache = new Map<string, OgData>();
   const imagePromises: Promise<void>[] = [];
 
-  // Collect attachment image URLs. Upload URLs need the access token as a
-  // query param because the browser can't send custom headers on <img>.
-  for (const msg of messages) {
-    for (const att of msg.attachments || []) {
-      if (IMAGE_EXTS.includes(getExt(att))) {
-        imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}?token=${encodeURIComponent(accessToken)}`));
+  // Collect attachment image URLs. Upload URLs need a short-lived upload
+  // token as a query param because the browser can't send custom headers on
+  // <img>. If the token isn't ready yet, skip preloading — the image will
+  // load lazily once the component rerenders with a real token.
+  if (uploadToken) {
+    for (const msg of messages) {
+      for (const att of msg.attachments || []) {
+        if (IMAGE_EXTS.includes(getExt(att))) {
+          imagePromises.push(preloadImage(`${protocol}://${serverIP}${att}?token=${encodeURIComponent(uploadToken)}`));
+        }
       }
     }
   }
