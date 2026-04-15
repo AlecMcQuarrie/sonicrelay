@@ -44,12 +44,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           value={{
             light: 'light',
             dark: 'dark',
-            dracula: 'dark theme-dracula',
-            nord: 'dark theme-nord',
-            monokai: 'dark theme-monokai',
-            gruvbox: 'dark theme-gruvbox',
-            'solarized-light': 'light theme-solarized-light',
-            custom: 'dark theme-custom',
+            dracula: 'theme-dracula',
+            nord: 'theme-nord',
+            monokai: 'theme-monokai',
+            gruvbox: 'theme-gruvbox',
+            'solarized-light': 'theme-solarized-light',
+            custom: 'theme-custom',
           }}
         >
           {children}

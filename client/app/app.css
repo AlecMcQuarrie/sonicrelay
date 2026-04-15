@@ -3,7 +3,9 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-@custom-variant dark (&:is(.dark *));
+/* Tailwind's `dark:` variant fires under any dark-flavored theme class.
+ * Listed explicitly so light themes like .theme-solarized-light are excluded. */
+@custom-variant dark (&:is(.dark *, .theme-dracula *, .theme-nord *, .theme-monokai *, .theme-gruvbox *, .theme-custom *));
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
