@@ -381,7 +381,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         </div>
       ) : (
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col-reverse">
-        <div className="space-y-2">
+        <div className="space-y-2 min-w-0 w-full">
           {/* Sentinel for loading older messages */}
           {hasMore && <div ref={sentinelRef} className="h-1" />}
           {loadingMore && (
@@ -412,7 +412,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                           if (replyTarget && replyTarget !== 'deleted') jumpToMessage(msg.replyToId!);
                         }}
                         className={cn(
-                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5",
+                          "flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5 min-w-0",
                           replyTarget && replyTarget !== 'deleted'
                             ? "cursor-pointer hover:text-foreground transition-colors"
                             : "cursor-default"
@@ -420,11 +420,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                       >
                         <CornerUpLeft className="w-3 h-3 shrink-0" />
                         {replyTarget === 'deleted' ? (
-                          <span className="italic">Original message was deleted</span>
+                          <span className="italic truncate min-w-0">Original message was deleted</span>
                         ) : replyTarget ? (
                           <>
-                            <span className="font-semibold">{replyTarget.sender}</span>
-                            <span className="truncate max-w-60">
+                            <span className="font-semibold truncate min-w-0 shrink">{replyTarget.sender}</span>
+                            <span className="truncate min-w-0 max-w-60">
                               {replyTarget.messageContent
                                 ? replyTarget.messageContent.length > 60
                                   ? replyTarget.messageContent.slice(0, 60) + '...'
