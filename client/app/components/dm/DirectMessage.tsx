@@ -501,10 +501,12 @@ export default function DirectMessage({
                         )}
                       </div>
                     )}
-                    <span className="font-bold">{msg.sender}</span>{" "}
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
+                    <div className="flex items-baseline gap-1.5 min-w-0">
+                      <span className="font-bold truncate min-w-0">{msg.sender}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
                     {msg.text && (
                       <MessageContent
                         text={msg.text}

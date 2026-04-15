@@ -437,10 +437,17 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                         )}
                       </div>
                     )}
-                    <span className="font-bold" style={nameColors[msg.sender] ? { color: nameColors[msg.sender]! } : undefined}>{msg.sender}</span>{" "}
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
+                    <div className="flex items-baseline gap-1.5 min-w-0">
+                      <span
+                        className="font-bold truncate min-w-0"
+                        style={nameColors[msg.sender] ? { color: nameColors[msg.sender]! } : undefined}
+                      >
+                        {msg.sender}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
                     {msg.messageContent && (
                       <MessageContent
                         text={msg.messageContent}
