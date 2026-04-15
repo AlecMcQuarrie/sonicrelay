@@ -15,6 +15,7 @@ router.get("/users", (req: Request, res: Response) => {
       profilePhoto: u.profilePhoto || null,
       role: (u.role || 'member') as Role,
       publicKey: (u as any).publicKey || null,
+      nameColor: u.nameColor || null,
     }));
   return res.status(200).json({ users });
 });

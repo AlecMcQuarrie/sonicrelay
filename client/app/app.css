@@ -135,6 +135,163 @@ body {
   --sidebar-ring: rgb(115, 115, 115);
 }
 
+/* ── Theme presets ──────────────────────────────────────────────────────────
+ * Each preset overrides the same shadcn variables as .dark. next-themes
+ * composes them with `dark`/`light` classes so Tailwind `dark:` variants
+ * keep working — see root.tsx for the mapping. Sidebar vars mirror the
+ * main palette; custom theme colors are applied via inline styles at
+ * runtime (see lib/themes.ts → useCustomThemeVars).
+ */
+.theme-dracula {
+  --background: #282a36;
+  --foreground: #f8f8f2;
+  --card: #343746;
+  --card-foreground: #f8f8f2;
+  --popover: #343746;
+  --popover-foreground: #f8f8f2;
+  --primary: #bd93f9;
+  --primary-foreground: #282a36;
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+  --muted: #383b4c;
+  --muted-foreground: #bfbfbf;
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+  --destructive: #ff5555;
+  --border: #44475a;
+  --input: #3d4056;
+  --ring: #bd93f9;
+  --sidebar: #282a36;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #bd93f9;
+  --sidebar-primary-foreground: #282a36;
+  --sidebar-accent: #44475a;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #44475a;
+  --sidebar-ring: #bd93f9;
+}
+
+.theme-nord {
+  --background: #2e3440;
+  --foreground: #d8dee9;
+  --card: #3b4252;
+  --card-foreground: #d8dee9;
+  --popover: #3b4252;
+  --popover-foreground: #d8dee9;
+  --primary: #88c0d0;
+  --primary-foreground: #2e3440;
+  --secondary: #434c5e;
+  --secondary-foreground: #d8dee9;
+  --muted: #3f4859;
+  --muted-foreground: #a0a8b7;
+  --accent: #4c566a;
+  --accent-foreground: #eceff4;
+  --destructive: #bf616a;
+  --border: #3b4252;
+  --input: #434c5e;
+  --ring: #88c0d0;
+  --sidebar: #2e3440;
+  --sidebar-foreground: #d8dee9;
+  --sidebar-primary: #88c0d0;
+  --sidebar-primary-foreground: #2e3440;
+  --sidebar-accent: #4c566a;
+  --sidebar-accent-foreground: #eceff4;
+  --sidebar-border: #3b4252;
+  --sidebar-ring: #88c0d0;
+}
+
+.theme-monokai {
+  --background: #272822;
+  --foreground: #f8f8f2;
+  --card: #34352e;
+  --card-foreground: #f8f8f2;
+  --popover: #34352e;
+  --popover-foreground: #f8f8f2;
+  --primary: #a6e22e;
+  --primary-foreground: #272822;
+  --secondary: #464530;
+  --secondary-foreground: #f8f8f2;
+  --muted: #3b3a30;
+  --muted-foreground: #b3b3a6;
+  --accent: #464530;
+  --accent-foreground: #f8f8f2;
+  --destructive: #f92672;
+  --border: #3e3d32;
+  --input: #3e3d32;
+  --ring: #a6e22e;
+  --sidebar: #272822;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #a6e22e;
+  --sidebar-primary-foreground: #272822;
+  --sidebar-accent: #464530;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #3e3d32;
+  --sidebar-ring: #a6e22e;
+}
+
+.theme-gruvbox {
+  --background: #282828;
+  --foreground: #ebdbb2;
+  --card: #3c3836;
+  --card-foreground: #ebdbb2;
+  --popover: #3c3836;
+  --popover-foreground: #ebdbb2;
+  --primary: #fe8019;
+  --primary-foreground: #282828;
+  --secondary: #504945;
+  --secondary-foreground: #ebdbb2;
+  --muted: #413c37;
+  --muted-foreground: #bdae93;
+  --accent: #504945;
+  --accent-foreground: #fbf1c7;
+  --destructive: #fb4934;
+  --border: #3c3836;
+  --input: #46413c;
+  --ring: #fe8019;
+  --sidebar: #282828;
+  --sidebar-foreground: #ebdbb2;
+  --sidebar-primary: #fe8019;
+  --sidebar-primary-foreground: #282828;
+  --sidebar-accent: #504945;
+  --sidebar-accent-foreground: #fbf1c7;
+  --sidebar-border: #3c3836;
+  --sidebar-ring: #fe8019;
+}
+
+.theme-solarized-light {
+  --background: #fdf6e3;
+  --foreground: #586e75;
+  --card: #eee8d5;
+  --card-foreground: #586e75;
+  --popover: #eee8d5;
+  --popover-foreground: #586e75;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --secondary: #ddd6c1;
+  --secondary-foreground: #586e75;
+  --muted: #e8e1cc;
+  --muted-foreground: #839496;
+  --accent: #ddd6c1;
+  --accent-foreground: #073642;
+  --destructive: #dc322f;
+  --border: #d0c8b0;
+  --input: #d4ccb6;
+  --ring: #268bd2;
+  --sidebar: #fdf6e3;
+  --sidebar-foreground: #586e75;
+  --sidebar-primary: #268bd2;
+  --sidebar-primary-foreground: #fdf6e3;
+  --sidebar-accent: #ddd6c1;
+  --sidebar-accent-foreground: #073642;
+  --sidebar-border: #d0c8b0;
+  --sidebar-ring: #268bd2;
+}
+
+/* Custom theme — variables are written as inline styles on <html> by
+ * useCustomThemeVars in lib/themes.ts. Class presence signals the hook
+ * to apply; the class itself has no declarations. */
+.theme-custom {}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

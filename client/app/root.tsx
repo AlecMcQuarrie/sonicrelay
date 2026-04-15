@@ -40,6 +40,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
           defaultTheme="system"
           enableSystem
           disableTransitionOnChange
+          themes={['system', 'light', 'dark', 'dracula', 'nord', 'monokai', 'gruvbox', 'solarized-light', 'custom']}
+          value={{
+            light: 'light',
+            dark: 'dark',
+            dracula: 'dark theme-dracula',
+            nord: 'dark theme-nord',
+            monokai: 'dark theme-monokai',
+            gruvbox: 'dark theme-gruvbox',
+            'solarized-light': 'light theme-solarized-light',
+            custom: 'dark theme-custom',
+          }}
         >
           {children}
         </ThemeProvider>

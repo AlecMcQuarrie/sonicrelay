@@ -32,11 +32,12 @@ interface TextChannelProps {
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
   profilePhotos: Record<string, string | null>;
+  nameColors: Record<string, string | null>;
   myRole: 'superadmin' | 'admin' | 'member';
   onStartDm?: (username: string) => void;
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, uploadToken, username, wsRef, profilePhotos, myRole, onStartDm }: TextChannelProps) {
+export default function TextChannel({ serverIP, channelId, channelName, accessToken, uploadToken, username, wsRef, profilePhotos, nameColors, myRole, onStartDm }: TextChannelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -436,7 +437,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
                         )}
                       </div>
                     )}
-                    <span className="font-bold">{msg.sender}</span>{" "}
+                    <span className="font-bold" style={nameColors[msg.sender] ? { color: nameColors[msg.sender]! } : undefined}>{msg.sender}</span>{" "}
                     <span className="text-xs text-muted-foreground">
                       {new Date(msg.timestamp).toLocaleTimeString()}
                     </span>

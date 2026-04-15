@@ -56,6 +56,7 @@ type VoiceHandlers = {
   onVideoTrack: (username: string, track: MediaStreamTrack | null) => void;
   onScreenTrack: (username: string, track: MediaStreamTrack | null) => void;
   onScreenAudioChange: (username: string, available: boolean) => void;
+  onSessionSuperseded?: () => void;
 };
 
 export class VoiceClient {
@@ -89,9 +90,52 @@ export class VoiceClient {
   private producerUsernames = new Map<string, string>(); // producerId -> username
   private levelCheckInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Master gain / VAD / PTT — set from the Voice settings tab, persisted to
+  // localStorage, applied transparently to the outgoing mic track.
+  private micGainNode: GainNode | null = null;
+  private vadGateNode: GainNode | null = null;
+  private micDestination: MediaStreamAudioDestinationNode | null = null;
+  private rawMicStream: MediaStream | null = null;
+  private micGain = 1;
+  private speakerGain = 1;
+  private vadMode: 'off' | 'auto' | 'manual' = 'off';
+  private vadThreshold = 30;
+  private vadNoiseFloor = 10;
+  private pttEnabled = false;
+  private pttKey = '';
+  private pttHeld = false;
+  private lastLocalRms = 0; // 0..100, scaled from byte-domain RMS
+  private userBaseVolumes = new Map<string, number>(); // username -> 0..1 (pre-speakerGain)
+  private keyDownHandler: (e: KeyboardEvent) => void;
+  private keyUpHandler: (e: KeyboardEvent) => void;
+
   constructor(ws: WebSocket, handlers: VoiceHandlers) {
     this.ws = ws;
     this.handlers = handlers;
+
+    // Load persisted voice settings
+    this.micGain = parseFloat(localStorage.getItem('micGain') ?? '1');
+    this.speakerGain = parseFloat(localStorage.getItem('speakerGain') ?? '1');
+    const storedMode = localStorage.getItem('vadMode');
+    if (storedMode === 'off' || storedMode === 'auto' || storedMode === 'manual') this.vadMode = storedMode;
+    this.vadThreshold = parseFloat(localStorage.getItem('vadThreshold') ?? '30');
+    this.pttEnabled = localStorage.getItem('pttEnabled') === 'true';
+    this.pttKey = localStorage.getItem('pttKey') ?? '';
+
+    // PTT listeners — always installed, gated on pttEnabled so toggling
+    // from the settings tab takes effect without rewiring event handlers.
+    this.keyDownHandler = (e: KeyboardEvent) => {
+      if (!this.pttEnabled || !this.pttKey || e.key !== this.pttKey) return;
+      this.pttHeld = true;
+      this.updateVadGate();
+    };
+    this.keyUpHandler = (e: KeyboardEvent) => {
+      if (!this.pttEnabled || !this.pttKey || e.key !== this.pttKey) return;
+      this.pttHeld = false;
+      this.updateVadGate();
+    };
+    window.addEventListener('keydown', this.keyDownHandler);
+    window.addEventListener('keyup', this.keyUpHandler);
 
     // Listen for voice notifications
     this.notificationHandler = (event: MessageEvent) => {
@@ -114,6 +158,9 @@ export class VoiceClient {
         case 'peer-left':
           this.handlers.onPeerLeft(msg.channelId, msg.username);
           new Audio('/sounds/ping.mp3').play().catch(() => {});
+          break;
+        case 'session-superseded':
+          this.handlers.onSessionSuperseded?.();
           break;
       }
     };
@@ -155,18 +202,22 @@ export class VoiceClient {
       }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
     });
 
-    // Produce audio from microphone
-    const preferredAudio = localStorage.getItem("preferredAudioDevice");
+    // Produce audio from microphone. The raw stream is routed through a
+    // Web Audio graph (source → micGain → vadGate → destination) so master
+    // volume, VAD, and PTT can be applied before the track reaches mediasoup.
     // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
     // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const preferredAudio = localStorage.getItem("preferredAudioDevice");
+    this.rawMicStream = await navigator.mediaDevices.getUserMedia({
       audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
     });
-    this.audioProducer = await this.sendTransport.produce({ track: stream.getAudioTracks()[0] });
+    const gatedTrack = this.buildMicGraph(this.rawMicStream);
+    this.audioProducer = await this.sendTransport.produce({ track: gatedTrack });
 
-    // Monitor local mic audio levels
+    // Monitor local mic audio levels on the raw (pre-gate) stream so the
+    // level meter reflects actual input, not what's being transmitted.
     if (this.localUsername && this.audioContext) {
-      const source = this.audioContext.createMediaStreamSource(stream);
+      const source = this.audioContext.createMediaStreamSource(this.rawMicStream);
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
@@ -298,6 +349,47 @@ export class VoiceClient {
     this.producerSources.delete(producerId);
   }
 
+  private buildMicGraph(stream: MediaStream): MediaStreamTrack {
+    if (!this.audioContext) throw new Error('AudioContext not initialized');
+    this.micGainNode?.disconnect();
+    this.vadGateNode?.disconnect();
+    this.micDestination?.disconnect();
+
+    const source = this.audioContext.createMediaStreamSource(stream);
+    this.micGainNode = this.audioContext.createGain();
+    this.micGainNode.gain.value = this.micGain;
+    this.vadGateNode = this.audioContext.createGain();
+    // Start open; startLevelMonitoring / PTT listeners will close it as needed.
+    this.vadGateNode.gain.value = 1;
+    this.micDestination = this.audioContext.createMediaStreamDestination();
+
+    source.connect(this.micGainNode);
+    this.micGainNode.connect(this.vadGateNode);
+    this.vadGateNode.connect(this.micDestination);
+
+    return this.micDestination.stream.getAudioTracks()[0];
+  }
+
+  private updateVadGate() {
+    if (!this.vadGateNode) return;
+    let open: boolean;
+    if (this.pttEnabled) {
+      open = this.pttHeld;
+    } else if (this.vadMode === 'off') {
+      open = true;
+    } else if (this.vadMode === 'manual') {
+      open = this.lastLocalRms > this.vadThreshold;
+    } else {
+      // auto: track noise floor, derive adaptive threshold
+      if (this.lastLocalRms < this.vadNoiseFloor * 2.5 + 8) {
+        this.vadNoiseFloor = this.vadNoiseFloor * 0.94 + this.lastLocalRms * 0.06;
+      }
+      const autoThresh = Math.min(Math.max(this.vadNoiseFloor * 2.5 + 8, 8), 60);
+      open = this.lastLocalRms > autoThresh;
+    }
+    this.vadGateNode.gain.value = open ? 1 : 0;
+  }
+
   private startLevelMonitoring() {
     const SPEAKING_THRESHOLD = 3; // RMS deviation from silence (0-128 scale)
     const bufferLength = 256; // matches fftSize on our analysers
@@ -314,7 +406,18 @@ export class VoiceClient {
         }
         const rms = Math.sqrt(sumSquares / dataArray.length);
 
-        const isSpeaking = rms > SPEAKING_THRESHOLD;
+        if (username === this.localUsername) {
+          // Scale to 0-100 to match the VAD threshold UI scale
+          this.lastLocalRms = (rms / 128) * 100;
+          this.updateVadGate();
+        }
+
+        // Gate the speaking indicator for the local user on whether we're
+        // actually transmitting — otherwise PTT/VAD users see themselves lit
+        // up while peers hear nothing.
+        const isLocal = username === this.localUsername;
+        const gateOpen = !isLocal || !this.vadGateNode || this.vadGateNode.gain.value > 0.001;
+        const isSpeaking = gateOpen && rms > SPEAKING_THRESHOLD;
         const wasSpeaking = this.speakingState.get(username) ?? false;
         if (isSpeaking !== wasSpeaking) {
           this.speakingState.set(username, isSpeaking);
@@ -467,7 +570,7 @@ export class VoiceClient {
     }
   }
 
-  async leave() {
+  async leave(notifyServer = true) {
     this.stopLevelMonitoring();
 
     // Stop camera and screen hardware
@@ -507,7 +610,7 @@ export class VoiceClient {
     this.producerSources.clear();
 
     // Notify server, but don't let a dead WebSocket block cleanup
-    if (this.channelId) {
+    if (notifyServer && this.channelId) {
       try { await request(this.ws, 'leave', { channelId: this.channelId }); } catch {}
     }
     this.audioProducer?.close();
@@ -521,6 +624,13 @@ export class VoiceClient {
     this.audioElements.forEach((a) => { a.srcObject = null; });
     this.audioElements.clear();
     this.userAudioElements.clear();
+    this.userBaseVolumes.clear();
+    this.rawMicStream?.getTracks().forEach((t) => t.stop());
+    this.rawMicStream = null;
+    this.micGainNode = null;
+    this.vadGateNode = null;
+    this.micDestination = null;
+    this.pttHeld = false;
     this.audioProducer = null;
     this.videoProducer = null;
     this.screenProducer = null;
@@ -552,8 +662,9 @@ export class VoiceClient {
   }
 
   setUserVolume(username: string, volume: number) {
+    this.userBaseVolumes.set(username, volume);
     const audio = this.userAudioElements.get(username);
-    if (audio) audio.volume = Math.max(0, Math.min(1, volume));
+    if (audio) audio.volume = Math.max(0, Math.min(1, volume * this.speakerGain));
   }
 
   setUserMuted(username: string, muted: boolean) {
@@ -563,21 +674,63 @@ export class VoiceClient {
 
   async switchAudioDevice(deviceId: string) {
     if (!this.audioProducer || !this.sendTransport) return;
-    const stream = await navigator.mediaDevices.getUserMedia({
+    // Release the old mic hardware before grabbing the new one
+    this.rawMicStream?.getTracks().forEach((t) => t.stop());
+    this.rawMicStream = await navigator.mediaDevices.getUserMedia({
       audio: { ...(deviceId && { deviceId: { exact: deviceId } }), autoGainControl: false },
     });
-    const newTrack = stream.getAudioTracks()[0];
-    await this.audioProducer.replaceTrack({ track: newTrack });
+    const gatedTrack = this.buildMicGraph(this.rawMicStream);
+    await this.audioProducer.replaceTrack({ track: gatedTrack });
 
-    // Update local mic level monitoring
+    // Rebuild local mic analyser on the raw stream
     if (this.localUsername && this.audioContext) {
       this.analysers.delete(this.localUsername);
-      const source = this.audioContext.createMediaStreamSource(stream);
+      const source = this.audioContext.createMediaStreamSource(this.rawMicStream);
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
       this.analysers.set(this.localUsername, analyser);
     }
+  }
+
+  setMicGain(gain: number) {
+    this.micGain = gain;
+    localStorage.setItem('micGain', String(gain));
+    if (this.micGainNode) this.micGainNode.gain.value = gain;
+  }
+
+  setSpeakerGain(gain: number) {
+    this.speakerGain = gain;
+    localStorage.setItem('speakerGain', String(gain));
+    for (const [username, base] of this.userBaseVolumes) {
+      const audio = this.userAudioElements.get(username);
+      if (audio) audio.volume = Math.max(0, Math.min(1, base * gain));
+    }
+  }
+
+  setVadMode(mode: 'off' | 'auto' | 'manual') {
+    this.vadMode = mode;
+    this.vadNoiseFloor = 10;
+    localStorage.setItem('vadMode', mode);
+    this.updateVadGate();
+  }
+
+  setVadThreshold(threshold: number) {
+    this.vadThreshold = threshold;
+    localStorage.setItem('vadThreshold', String(threshold));
+    this.updateVadGate();
+  }
+
+  setPttEnabled(enabled: boolean) {
+    this.pttEnabled = enabled;
+    this.pttHeld = false;
+    localStorage.setItem('pttEnabled', String(enabled));
+    this.updateVadGate();
+  }
+
+  setPttKey(key: string) {
+    this.pttKey = key;
+    localStorage.setItem('pttKey', key);
   }
 
   async switchOutputDevice(deviceId: string) {
@@ -617,6 +770,8 @@ export class VoiceClient {
   }
 
   destroy() {
+    window.removeEventListener('keydown', this.keyDownHandler);
+    window.removeEventListener('keyup', this.keyUpHandler);
     this.ws.removeEventListener('message', this.notificationHandler);
   }
 }

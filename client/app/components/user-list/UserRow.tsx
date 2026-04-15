@@ -16,6 +16,7 @@ interface UserRowProps {
   user: string;
   online: boolean;
   photoUrl: string | null;
+  nameColor: string | null;
   targetRole: Role;
   myRole: Role;
   isSelf: boolean;
@@ -25,7 +26,7 @@ interface UserRowProps {
   onMessage: () => void;
 }
 
-export default function UserRow({ user, online, photoUrl, targetRole, myRole, isSelf, onPromote, onDemote, onBanClick, onMessage }: UserRowProps) {
+export default function UserRow({ user, online, photoUrl, nameColor, targetRole, myRole, isSelf, onPromote, onDemote, onBanClick, onMessage }: UserRowProps) {
   const [open, setOpen] = useState(false);
 
   const canPromote = !isSelf
@@ -54,7 +55,7 @@ export default function UserRow({ user, online, photoUrl, targetRole, myRole, is
           }`}
         >
           <Avatar username={user} profilePhoto={photoUrl} size="sm" />
-          <span className="flex-1 truncate">{user}</span>
+          <span className="flex-1 truncate" style={online && nameColor ? { color: nameColor } : undefined}>{user}</span>
           <div className="flex items-center gap-1.5 shrink-0 ml-auto">
             {targetRole !== 'member' && <RoleBadge role={targetRole} />}
             <span

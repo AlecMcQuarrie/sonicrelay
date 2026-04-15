@@ -94,6 +94,39 @@ const wss = new WebSocketServer({
 // Ping measurement: track round-trip time per client
 const clientPings = new Map<WebSocket, number>();
 
+// Tear down any live voice sessions belonging to the same user on other
+// sockets before a new join. Prevents duplicate mediasoup peers (and the
+// resulting chorus effect) when the same account joins from a second tab.
+function evictPriorVoiceSessions(username: string, currentWs: WebSocket) {
+  for (const [otherWs, otherClient] of clients) {
+    if (otherWs === currentWs) continue;
+    if (otherClient.username !== username) continue;
+    if (!otherClient.voiceChannelId) continue;
+
+    const oldChannelId = otherClient.voiceChannelId;
+    const closedProducerIds = voice.leave(oldChannelId, username);
+    otherClient.voiceChannelId = null;
+    otherClient.isMuted = false;
+    otherClient.isDeafened = false;
+
+    for (const producerId of closedProducerIds) {
+      broadcastToVoiceChannel(oldChannelId, {
+        type: 'voice-notification', action: 'producer-closed', producerId,
+      });
+    }
+    broadcastToAll({
+      type: 'voice-notification', action: 'peer-left',
+      channelId: oldChannelId, username,
+    });
+    if (otherWs.readyState === WebSocket.OPEN) {
+      otherWs.send(JSON.stringify({
+        type: 'voice-notification', action: 'session-superseded',
+        channelId: oldChannelId,
+      }));
+    }
+  }
+}
+
 function getVoicePings(): Record<string, number> {
   const pings: Record<string, number> = {};
   for (const [ws, client] of clients) {
@@ -341,6 +374,7 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
       try {
         switch (msg.action) {
           case 'join': {
+            evictPriorVoiceSessions(username, ws);
             const result = await voice.join(msg.channelId, username);
             const client = clients.get(ws);
             if (client) client.voiceChannelId = msg.channelId;

@@ -4,6 +4,9 @@ import Avatar from "~/components/ui/avatar";
 import SettingsModal from "./SettingsModal";
 import { buildUploadUrl } from "~/lib/protocol";
 import type { VoiceClient } from "~/lib/voice";
+import type { UserSettings } from "~/lib/settings";
+
+type Role = 'superadmin' | 'admin' | 'member';
 
 interface UserPanelProps {
   username: string;
@@ -12,10 +15,36 @@ interface UserPanelProps {
   accessToken: string;
   uploadToken: string | null;
   onProfilePhotoChange: (url: string) => void;
+  nameColor: string | null;
+  onNameColorChange: (color: string | null) => void;
+  myRole: Role;
+  totalUsers: number;
+  onlineCount: number;
+  channelCount: number;
+  onLogout: () => void;
   voiceRef: RefObject<VoiceClient | null>;
+  settings: UserSettings;
+  updateSettings: (partial: Partial<UserSettings>) => void;
 }
 
-export default function UserPanel({ username, serverIP, profilePhoto, accessToken, uploadToken, onProfilePhotoChange, voiceRef }: UserPanelProps) {
+export default function UserPanel({
+  username,
+  serverIP,
+  profilePhoto,
+  accessToken,
+  uploadToken,
+  onProfilePhotoChange,
+  nameColor,
+  onNameColorChange,
+  myRole,
+  totalUsers,
+  onlineCount,
+  channelCount,
+  onLogout,
+  voiceRef,
+  settings,
+  updateSettings,
+}: UserPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const photoUrl = profilePhoto && uploadToken ? buildUploadUrl(profilePhoto, serverIP, uploadToken) : null;
 
@@ -23,7 +52,7 @@ export default function UserPanel({ username, serverIP, profilePhoto, accessToke
     <>
       <div className="border-t p-3 flex items-center gap-2">
         <Avatar username={username} profilePhoto={photoUrl} />
-        <span className="text-sm font-medium truncate flex-1">{username}</span>
+        <span className="text-sm font-medium truncate flex-1" style={nameColor ? { color: nameColor } : undefined}>{username}</span>
         <button
           onClick={() => setSettingsOpen(true)}
           className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted"
@@ -36,9 +65,19 @@ export default function UserPanel({ username, serverIP, profilePhoto, accessToke
         onOpenChange={setSettingsOpen}
         serverIP={serverIP}
         accessToken={accessToken}
+        username={username}
         profilePhoto={photoUrl}
         onProfilePhotoChange={onProfilePhotoChange}
+        nameColor={nameColor}
+        onNameColorChange={onNameColorChange}
+        myRole={myRole}
+        totalUsers={totalUsers}
+        onlineCount={onlineCount}
+        channelCount={channelCount}
         voiceRef={voiceRef}
+        onLogout={onLogout}
+        settings={settings}
+        updateSettings={updateSettings}
       />
     </>
   );

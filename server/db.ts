@@ -9,6 +9,25 @@ export type VoicePeerSetting = {
 
 export type Role = 'superadmin' | 'admin' | 'member';
 
+export type CustomThemeColors = {
+  background: string;
+  card: string;
+  foreground: string;
+  primary: string;
+  destructive: string;
+};
+
+export type UserSettings = {
+  micGain?: number;
+  speakerGain?: number;
+  vadMode?: 'off' | 'auto' | 'manual';
+  vadThreshold?: number;
+  pttEnabled?: boolean;
+  pttKey?: string;
+  theme?: string;
+  customThemeColors?: CustomThemeColors;
+};
+
 export type User = {
   username: string;
   password: string;
@@ -17,6 +36,8 @@ export type User = {
   screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
   role: Role;
   banned: boolean;
+  nameColor: string | null;
+  settings: UserSettings | null;
   publicKey: string | null;
   encryptedPrivateKey: string | null;
   pbkdfSalt: string | null;

@@ -12,6 +12,14 @@ import { ServerRailContent } from "~/components/server-rail/ServerRail";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
 import { getProtocol, getWsProtocol } from "~/lib/protocol";
+import { useTheme } from "next-themes";
+import {
+  DEFAULT_SETTINGS,
+  loadCachedSettings,
+  cacheSettings,
+  applyVoiceSettings,
+  type UserSettings,
+} from "~/lib/settings";
 import useDmState from "~/hooks/useDmState";
 import useNotifications from "~/hooks/useNotifications";
 import type { StoredConnection } from "~/lib/auth";
@@ -45,6 +53,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     unregisterVoiceActions,
     setUnreadCount,
     setVoiceStatus,
+    removeConnection,
   } = useConnectionManager();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedTextChannelId, setSelectedTextChannelId] = useState<string | null>(null);
@@ -69,6 +78,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
+  const [nameColors, setNameColors] = useState<Record<string, string | null>>({});
+  const [settings, setSettings] = useState<UserSettings>(() => loadCachedSettings());
+  const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSettingsRef = useRef<Partial<UserSettings>>({});
+  const { setTheme } = useTheme();
   // Short-lived upload-scoped token used as ?token=... on image URLs so the
   // long-lived session JWT never touches a URL (and therefore never ends up
   // in access logs or browser history). Auto-refreshed below.
@@ -148,13 +162,16 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         const photos: Record<string, string | null> = {};
         const roles: Record<string, Role> = {};
         const keys: Record<string, string> = {};
-        data.users.forEach((u: { username: string; profilePhoto: string | null; role: Role; publicKey: string | null }) => {
+        const colors: Record<string, string | null> = {};
+        data.users.forEach((u: { username: string; profilePhoto: string | null; role: Role; publicKey: string | null; nameColor: string | null }) => {
           photos[u.username] = u.profilePhoto;
           roles[u.username] = u.role || 'member';
+          colors[u.username] = u.nameColor || null;
           if (u.publicKey) keys[u.username] = u.publicKey;
         });
         setProfilePhotos(photos);
         setUserRoles(roles);
+        setNameColors(colors);
         setPublicKeys(keys);
       });
 
@@ -163,13 +180,30 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
-      .then((data) => setMyRole((data.role as Role) || 'member'));
+      .then((data) => {
+        setMyRole((data.role as Role) || 'member');
+        setNameColors((prev) => ({ ...prev, [username]: data.nameColor || null }));
+      });
 
     fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
       headers: { "access-token": accessToken },
     })
       .then((res) => res.json())
       .then((data) => setVoicePeerSettings(data.voicePeerSettings || {}));
+
+    fetch(`${protocol}://${serverIP}/me/settings`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const cached = loadCachedSettings();
+        const merged: UserSettings = { ...DEFAULT_SETTINGS, ...cached, ...(data.settings || {}) };
+        setSettings(merged);
+        cacheSettings(merged);
+        applyVoiceSettings(voiceRef.current, merged);
+        setTheme(merged.theme);
+      })
+      .catch(() => {});
 
     fetch(`${protocol}://${serverIP}/me/screen-audio-peer-settings`, {
       headers: { "access-token": accessToken },
@@ -193,6 +227,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     wsRef.current = ws;
 
     // Initialize voice client
+    const cachedSettings = loadCachedSettings();
     voiceRef.current = new VoiceClient(ws, {
       onPeerJoined: (channelId, user) => {
         setVoicePeers((prev) => {
@@ -259,6 +294,10 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         // Sync isScreenSharing for local user
         if (user === username) setIsScreenSharing(!!track);
       },
+      onSessionSuperseded: () => {
+        voiceRef.current?.leave(false);
+        setVoiceChannelId(null);
+      },
       onScreenAudioChange: (user, available) => {
         setScreenAudioUsers((prev) => {
           const next = new Set(prev);
@@ -277,6 +316,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         }
       },
     });
+    // Apply cached settings immediately so the first call uses last-known
+    // values. The /me/settings fetch above will overwrite when it resolves.
+    applyVoiceSettings(voiceRef.current, cachedSettings);
 
     // Handle server pushes for voice state and presence
     const handleServerMessages = (event: MessageEvent) => {
@@ -337,6 +379,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       if (msg.type === 'role-changed') {
         setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
         if (msg.username === username) setMyRole(msg.role);
+      }
+      if (msg.type === 'name-color-changed') {
+        setNameColors((prev) => ({ ...prev, [msg.username]: msg.nameColor }));
       }
       if (msg.type === 'text-message' && msg.sender !== username) {
         const activelyViewing =
@@ -617,6 +662,23 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     });
   }, [registerVoiceActions, serverId, voiceChannelId, toggleMute, toggleDeafen, toggleCamera, leaveVoiceChannel]);
 
+  const updateSettings = useCallback((partial: Partial<UserSettings>) => {
+    setSettings((prev) => ({ ...prev, ...partial }));
+    cacheSettings(partial);
+    pendingSettingsRef.current = { ...pendingSettingsRef.current, ...partial };
+    if (settingsDebounceRef.current) clearTimeout(settingsDebounceRef.current);
+    settingsDebounceRef.current = setTimeout(() => {
+      const body = pendingSettingsRef.current;
+      pendingSettingsRef.current = {};
+      settingsDebounceRef.current = null;
+      fetch(`${protocol}://${serverIP}/me/settings`, {
+        method: 'PUT',
+        headers: { "access-token": accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).catch(() => {});
+    }, 500);
+  }, [protocol, serverIP, accessToken]);
+
   const saveVoicePeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
     fetch(`${protocol}://${serverIP}/me/voice-peer-settings`, {
       method: 'PUT',
@@ -787,7 +849,16 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         accessToken={accessToken}
         uploadToken={uploadToken}
         onProfilePhotoChange={(url) => setProfilePhotos((prev) => ({ ...prev, [username]: url }))}
+        nameColor={nameColors[username] ?? null}
+        onNameColorChange={(color) => setNameColors((prev) => ({ ...prev, [username]: color }))}
+        myRole={myRole}
+        totalUsers={allUsers.length}
+        onlineCount={onlineUsers.size}
+        channelCount={channels.length}
+        onLogout={() => removeConnection(serverId)}
         voiceRef={voiceRef}
+        settings={settings}
+        updateSettings={updateSettings}
       />
     </>
   );
@@ -797,6 +868,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       users={allUsers}
       onlineUsers={onlineUsers}
       profilePhotos={profilePhotos}
+      nameColors={nameColors}
       serverIP={serverIP}
       uploadToken={uploadToken}
       myUsername={username}
@@ -868,6 +940,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
               username={username}
               wsRef={wsRef}
               profilePhotos={profilePhotos}
+              nameColors={nameColors}
               myRole={myRole}
               onStartDm={startDm}
             />
