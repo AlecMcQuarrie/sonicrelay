@@ -208,9 +208,17 @@ export class VoiceClient {
     // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
     // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
     const preferredAudio = localStorage.getItem("preferredAudioDevice");
-    this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-      audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
-    });
+    try {
+      this.rawMicStream = await navigator.mediaDevices.getUserMedia({
+        audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
+      });
+    } catch (err) {
+      // Stored device is gone or no longer matches — drop it and use default.
+      if (preferredAudio) localStorage.removeItem("preferredAudioDevice");
+      this.rawMicStream = await navigator.mediaDevices.getUserMedia({
+        audio: { autoGainControl: false },
+      });
+    }
     const gatedTrack = this.buildMicGraph(this.rawMicStream);
     this.audioProducer = await this.sendTransport.produce({ track: gatedTrack });
 
