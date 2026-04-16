@@ -20,7 +20,8 @@ interface UserPanelProps {
   myRole: Role;
   totalUsers: number;
   onlineCount: number;
-  channelCount: number;
+  textChannelCount: number;
+  voiceChannelCount: number;
   onLogout: () => void;
   voiceRef: RefObject<VoiceClient | null>;
   settings: UserSettings;
@@ -39,7 +40,8 @@ export default function UserPanel({
   myRole,
   totalUsers,
   onlineCount,
-  channelCount,
+  textChannelCount,
+  voiceChannelCount,
   onLogout,
   voiceRef,
   settings,
@@ -73,7 +75,8 @@ export default function UserPanel({
         myRole={myRole}
         totalUsers={totalUsers}
         onlineCount={onlineCount}
-        channelCount={channelCount}
+        textChannelCount={textChannelCount}
+        voiceChannelCount={voiceChannelCount}
         voiceRef={voiceRef}
         onLogout={onLogout}
         settings={settings}

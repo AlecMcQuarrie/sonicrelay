@@ -20,6 +20,7 @@ import {
   applyVoiceSettings,
   type UserSettings,
 } from "~/lib/settings";
+import { useCustomThemeVars, CUSTOM_THEME_ID } from "~/lib/themes";
 import useDmState from "~/hooks/useDmState";
 import useNotifications from "~/hooks/useNotifications";
 import type { StoredConnection } from "~/lib/auth";
@@ -83,6 +84,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSettingsRef = useRef<Partial<UserSettings>>({});
   const { setTheme } = useTheme();
+  useCustomThemeVars(settings.customThemeColors, settings.theme === CUSTOM_THEME_ID);
   // Short-lived upload-scoped token used as ?token=... on image URLs so the
   // long-lived session JWT never touches a URL (and therefore never ends up
   // in access logs or browser history). Auto-refreshed below.
@@ -854,7 +856,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         myRole={myRole}
         totalUsers={allUsers.length}
         onlineCount={onlineUsers.size}
-        channelCount={channels.length}
+        textChannelCount={channels.filter(c => c.type === "text").length}
+        voiceChannelCount={channels.filter(c => c.type === "voice").length}
         onLogout={() => removeConnection(serverId)}
         voiceRef={voiceRef}
         settings={settings}

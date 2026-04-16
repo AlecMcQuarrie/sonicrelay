@@ -5,7 +5,6 @@ import {
   THEME_PRESETS,
   CUSTOM_THEME_ID,
   DEFAULT_CUSTOM_COLORS,
-  useCustomThemeVars,
   type CustomColors,
 } from "~/lib/themes";
 import type { UserSettings } from "~/lib/settings";
@@ -27,9 +26,6 @@ export default function ThemePicker({ settings, updateSettings }: ThemePickerPro
   const { setTheme } = useTheme();
   const customColors = settings.customThemeColors;
 
-  // Apply custom CSS variables as inline styles whenever the custom theme is active
-  useCustomThemeVars(customColors, settings.theme === CUSTOM_THEME_ID);
-
   const selectTheme = (id: string) => {
     updateSettings({ theme: id });
     setTheme(id);
@@ -46,7 +42,7 @@ export default function ThemePicker({ settings, updateSettings }: ThemePickerPro
   return (
     <div className="space-y-3">
       <label className="text-sm font-medium">Theme</label>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-2 p-0.5">
         {THEME_PRESETS.map((t) => (
           <ThemeTile
             key={t.id}

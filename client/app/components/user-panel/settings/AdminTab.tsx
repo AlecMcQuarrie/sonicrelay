@@ -2,17 +2,19 @@ interface AdminTabProps {
   serverIP: string;
   totalUsers: number;
   onlineCount: number;
-  channelCount: number;
+  textChannelCount: number;
+  voiceChannelCount: number;
 }
 
-export default function AdminTab({ serverIP, totalUsers, onlineCount, channelCount }: AdminTabProps) {
+export default function AdminTab({ serverIP, totalUsers, onlineCount, textChannelCount, voiceChannelCount }: AdminTabProps) {
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold">Server Admin</h3>
       <Row label="Server" value={serverIP} />
       <Row label="Total users" value={String(totalUsers)} />
       <Row label="Online now" value={String(onlineCount)} />
-      <Row label="Channels" value={String(channelCount)} />
+      <Row label="Text channels" value={String(textChannelCount)} />
+      <Row label="Voice channels" value={String(voiceChannelCount)} />
     </div>
   );
 }

@@ -63,6 +63,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   // Fetch initial messages, preload all media (attachments + link previews), then reveal
   useEffect(() => {
+    let cancelled = false;
     setMessages([]);
     setHasMore(false);
     setInitialLoading(true);
@@ -73,12 +74,15 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     })
       .then((res) => res.json())
       .then(async (data) => {
+        if (cancelled) return;
         const cache = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
+        if (cancelled) return;
         setOgCache(cache);
         setMessages(data.messages);
         setHasMore(data.hasMore);
         setInitialLoading(false);
       });
+    return () => { cancelled = true; };
   }, [channelId, accessToken]);
 
   // Load older messages — preload all media, then reveal

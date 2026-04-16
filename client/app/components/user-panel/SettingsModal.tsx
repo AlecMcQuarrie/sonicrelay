@@ -24,7 +24,8 @@ interface SettingsModalProps {
   myRole: Role;
   totalUsers: number;
   onlineCount: number;
-  channelCount: number;
+  textChannelCount: number;
+  voiceChannelCount: number;
   voiceRef: RefObject<VoiceClient | null>;
   onLogout: () => void;
   settings: UserSettings;
@@ -44,7 +45,8 @@ export default function SettingsModal({
   myRole,
   totalUsers,
   onlineCount,
-  channelCount,
+  textChannelCount,
+  voiceChannelCount,
   voiceRef,
   onLogout,
   settings,
@@ -69,7 +71,7 @@ export default function SettingsModal({
               Log Out
             </TabsTrigger>
           </TabsList>
-          <div className="flex-1 min-h-[360px] max-h-[70vh] overflow-y-auto pr-1">
+          <div className="flex-1 min-h-[360px] max-h-[70vh] overflow-y-auto overflow-x-hidden px-3">
             <TabsContent value="account">
               <AccountTab
                 serverIP={serverIP}
@@ -95,7 +97,8 @@ export default function SettingsModal({
                   serverIP={serverIP}
                   totalUsers={totalUsers}
                   onlineCount={onlineCount}
-                  channelCount={channelCount}
+                  textChannelCount={textChannelCount}
+                  voiceChannelCount={voiceChannelCount}
                 />
               </TabsContent>
             )}

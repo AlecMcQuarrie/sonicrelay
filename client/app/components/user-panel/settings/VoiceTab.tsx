@@ -85,7 +85,7 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Microphone</label>
         <Select value={selectedAudio || "default"} onValueChange={(v) => saveAudio(v === "default" ? "" : v)}>
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full [&>span]:truncate"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Default</SelectItem>
             {audioDevices.map((d) => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}
@@ -119,7 +119,7 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Playback Device</label>
         <Select value={selectedOutput || "default"} onValueChange={(v) => saveOutput(v === "default" ? "" : v)}>
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full [&>span]:truncate"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Default</SelectItem>
             {outputDevices.map((d) => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}
