@@ -23,7 +23,10 @@ const RESOLUTION_WIDTH: Record<number, number> = {
   1440: 2560,
 };
 
-// Send a voice request over WebSocket and await the matching response
+// Send a voice request over WebSocket and await the matching response.
+// cleanup() runs on timeout, matched response, or send failure — without it,
+// a ws.send() throw (socket closed between readyState check and send) would
+// leak the handler and timer.
 function request(ws: WebSocket, action: string, data: Record<string, any> = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     if (ws.readyState !== WebSocket.OPEN) {
@@ -31,21 +34,32 @@ function request(ws: WebSocket, action: string, data: Record<string, any> = {}):
       return;
     }
     const requestId = crypto.randomUUID();
-    const timeout = setTimeout(() => {
+    let settled = false;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       ws.removeEventListener('message', handler);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
       reject(new Error(`Request "${action}" timed out`));
     }, 10000);
     const handler = (event: MessageEvent) => {
       const msg = JSON.parse(event.data);
       if (msg.requestId === requestId) {
-        clearTimeout(timeout);
-        ws.removeEventListener('message', handler);
+        cleanup();
         if (msg.error) reject(new Error(msg.error));
         else resolve(msg);
       }
     };
     ws.addEventListener('message', handler);
-    ws.send(JSON.stringify({ requestId, type: 'voice', action, ...data }));
+    try {
+      ws.send(JSON.stringify({ requestId, type: 'voice', action, ...data }));
+    } catch (err) {
+      cleanup();
+      reject(err);
+    }
   });
 }
 
@@ -108,6 +122,7 @@ export class VoiceClient {
   private userBaseVolumes = new Map<string, number>(); // username -> 0..1 (pre-speakerGain)
   private keyDownHandler: (e: KeyboardEvent) => void;
   private keyUpHandler: (e: KeyboardEvent) => void;
+  private joinInProgress = false;
 
   constructor(ws: WebSocket, handlers: VoiceHandlers) {
     this.ws = ws;
@@ -168,94 +183,103 @@ export class VoiceClient {
   }
 
   async join(channelId: string, username?: string) {
-    this.channelId = channelId;
-    if (username) this.localUsername = username;
-    this.device = new Device();
-    this.audioContext = new AudioContext();
-    // Browsers may start AudioContext in suspended state — resume it
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
-    }
-
-    // Get router capabilities and join the room
-    const joinResult = await request(this.ws, 'join', { channelId });
-    await this.device.load({ routerRtpCapabilities: joinResult.rtpCapabilities });
-
-    // Create send transport
-    const sendParams = await request(this.ws, 'create-transport', { channelId, direction: 'send' });
-    this.sendTransport = this.device.createSendTransport({
-      id: sendParams.id,
-      iceParameters: sendParams.iceParameters,
-      iceCandidates: sendParams.iceCandidates,
-      dtlsParameters: sendParams.dtlsParameters,
-    });
-
-    this.sendTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
-      request(this.ws, 'connect-transport', {
-        channelId, transportId: this.sendTransport!.id, dtlsParameters,
-      }).then(() => callback()).catch(errback);
-    });
-
-    this.sendTransport.on('produce', ({ kind, rtpParameters, appData }, callback, errback) => {
-      request(this.ws, 'produce', {
-        channelId, kind, rtpParameters, source: appData?.source,
-      }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
-    });
-
-    // Produce audio from microphone. The raw stream is routed through a
-    // Web Audio graph (source → micGain → vadGate → destination) so master
-    // volume, VAD, and PTT can be applied before the track reaches mediasoup.
-    // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
-    // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
-    const preferredAudio = localStorage.getItem("preferredAudioDevice");
+    // Rapid channel switches / double-clicks would otherwise spawn a second
+    // Device + AudioContext and race the two transport setups against each
+    // other. Guard at the top and release in finally.
+    if (this.joinInProgress) throw new Error('Join already in progress');
+    this.joinInProgress = true;
     try {
-      this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
+      this.channelId = channelId;
+      if (username) this.localUsername = username;
+      this.device = new Device();
+      this.audioContext = new AudioContext();
+      // Browsers may start AudioContext in suspended state — resume it
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+
+      // Get router capabilities and join the room
+      const joinResult = await request(this.ws, 'join', { channelId });
+      await this.device.load({ routerRtpCapabilities: joinResult.rtpCapabilities });
+
+      // Create send transport
+      const sendParams = await request(this.ws, 'create-transport', { channelId, direction: 'send' });
+      this.sendTransport = this.device.createSendTransport({
+        id: sendParams.id,
+        iceParameters: sendParams.iceParameters,
+        iceCandidates: sendParams.iceCandidates,
+        dtlsParameters: sendParams.dtlsParameters,
       });
-    } catch (err) {
-      // Stored device is gone or no longer matches — drop it and use default.
-      if (preferredAudio) localStorage.removeItem("preferredAudioDevice");
-      this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: { autoGainControl: false },
+
+      this.sendTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+        request(this.ws, 'connect-transport', {
+          channelId, transportId: this.sendTransport!.id, dtlsParameters,
+        }).then(() => callback()).catch(errback);
       });
+
+      this.sendTransport.on('produce', ({ kind, rtpParameters, appData }, callback, errback) => {
+        request(this.ws, 'produce', {
+          channelId, kind, rtpParameters, source: appData?.source,
+        }).then(({ producerId }) => callback({ id: producerId })).catch(errback);
+      });
+
+      // Produce audio from microphone. The raw stream is routed through a
+      // Web Audio graph (source → micGain → vadGate → destination) so master
+      // volume, VAD, and PTT can be applied before the track reaches mediasoup.
+      // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
+      // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
+      const preferredAudio = localStorage.getItem("preferredAudioDevice");
+      try {
+        this.rawMicStream = await navigator.mediaDevices.getUserMedia({
+          audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
+        });
+      } catch (err) {
+        // Stored device is gone or no longer matches — drop it and use default.
+        if (preferredAudio) localStorage.removeItem("preferredAudioDevice");
+        this.rawMicStream = await navigator.mediaDevices.getUserMedia({
+          audio: { autoGainControl: false },
+        });
+      }
+      const gatedTrack = this.buildMicGraph(this.rawMicStream);
+      this.audioProducer = await this.sendTransport.produce({ track: gatedTrack });
+
+      // Monitor local mic audio levels on the raw (pre-gate) stream so the
+      // level meter reflects actual input, not what's being transmitted.
+      if (this.localUsername && this.audioContext) {
+        const source = this.audioContext.createMediaStreamSource(this.rawMicStream);
+        const analyser = this.audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        this.analysers.set(this.localUsername, analyser);
+      }
+
+      // Create recv transport
+      const recvParams = await request(this.ws, 'create-transport', { channelId, direction: 'recv' });
+      this.recvTransport = this.device.createRecvTransport({
+        id: recvParams.id,
+        iceParameters: recvParams.iceParameters,
+        iceCandidates: recvParams.iceCandidates,
+        dtlsParameters: recvParams.dtlsParameters,
+      });
+
+      this.recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+        request(this.ws, 'connect-transport', {
+          channelId, transportId: this.recvTransport!.id, dtlsParameters,
+        }).then(() => callback()).catch(errback);
+      });
+
+      // Consume existing producers in the channel
+      for (const { producerId, username: producerUsername, source } of joinResult.existingProducers) {
+        if (producerUsername) this.producerUsernames.set(producerId, producerUsername);
+        if (source) this.producerSources.set(producerId, source);
+        await this.consumeProducer(producerId);
+      }
+
+      // Start polling audio levels
+      this.startLevelMonitoring();
+    } finally {
+      this.joinInProgress = false;
     }
-    const gatedTrack = this.buildMicGraph(this.rawMicStream);
-    this.audioProducer = await this.sendTransport.produce({ track: gatedTrack });
-
-    // Monitor local mic audio levels on the raw (pre-gate) stream so the
-    // level meter reflects actual input, not what's being transmitted.
-    if (this.localUsername && this.audioContext) {
-      const source = this.audioContext.createMediaStreamSource(this.rawMicStream);
-      const analyser = this.audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      this.analysers.set(this.localUsername, analyser);
-    }
-
-    // Create recv transport
-    const recvParams = await request(this.ws, 'create-transport', { channelId, direction: 'recv' });
-    this.recvTransport = this.device.createRecvTransport({
-      id: recvParams.id,
-      iceParameters: recvParams.iceParameters,
-      iceCandidates: recvParams.iceCandidates,
-      dtlsParameters: recvParams.dtlsParameters,
-    });
-
-    this.recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
-      request(this.ws, 'connect-transport', {
-        channelId, transportId: this.recvTransport!.id, dtlsParameters,
-      }).then(() => callback()).catch(errback);
-    });
-
-    // Consume existing producers in the channel
-    for (const { producerId, username: producerUsername, source } of joinResult.existingProducers) {
-      if (producerUsername) this.producerUsernames.set(producerId, producerUsername);
-      if (source) this.producerSources.set(producerId, source);
-      await this.consumeProducer(producerId);
-    }
-
-    // Start polling audio levels
-    this.startLevelMonitoring();
   }
 
   private async consumeProducer(producerId: string) {

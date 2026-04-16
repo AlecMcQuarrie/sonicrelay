@@ -24,7 +24,7 @@ router.get("/users", (req: Request, res: Response) => {
 router.put("/users/:username/role", (req: Request, res: Response) => {
   const auth = authenticate(req);
   if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
+  if (auth.role !== 'admin' && auth.role !== 'superadmin') return res.sendStatus(403);
   const role = req.body.role as Role;
   if (role !== 'admin' && role !== 'member') return res.sendStatus(400); // can't assign superadmin via API
   const target = Users.get((u) => u.username === req.params.username);
@@ -45,7 +45,7 @@ router.put("/users/:username/role", (req: Request, res: Response) => {
 router.post("/users/:username/ban", (req: Request, res: Response) => {
   const auth = authenticate(req);
   if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
+  if (auth.role !== 'admin' && auth.role !== 'superadmin') return res.sendStatus(403);
   const target = Users.get((u) => u.username === req.params.username);
   if (!target) return res.sendStatus(404);
   const targetRole = target.role || 'member';

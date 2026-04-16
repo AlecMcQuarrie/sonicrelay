@@ -38,6 +38,7 @@ export function ServerRailContent({ onAfterSelect }: ServerRailContentProps) {
       <button
         onClick={() => setAddOpen(true)}
         title="Add server"
+        aria-label="Add server"
         className="w-12 h-12 rounded-full flex items-center justify-center bg-muted text-green-500 hover:rounded-xl hover:bg-green-500 hover:text-white transition-all"
       >
         <Plus className="w-5 h-5" />

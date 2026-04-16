@@ -5,7 +5,7 @@ import "dotenv/config";
 import path from 'path';
 import fs from 'fs';
 import * as voice from './voice';
-import { Users, Messages, DirectMessages, upsertDmConversation } from './db';
+import { Users, Messages, DirectMessages, Channels, upsertDmConversation } from './db';
 import { clients, broadcastToAll, broadcastToVoiceChannel, broadcastPresence, broadcastUserKey, getVoicePeers, getMutedUsers, getDeafenedUsers } from './clients';
 import authRoutes from './routes/auth';
 import channelRoutes from './routes/channels';
@@ -22,6 +22,14 @@ const cors = require('cors');
 type SonicRelayIncomingMessage = IncomingMessage & {
   username?: string;
 };
+
+// Fail fast if the JWT secret is missing or weak — otherwise the bug only
+// surfaces at first sign/verify op and can leave a server running with a
+// trivially-forgeable token.
+if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length < 32) {
+  console.error('FATAL: ENCRYPTION_KEY env var must be set and at least 32 characters');
+  process.exit(1);
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -213,9 +221,15 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
 
     // ── Text message ──
     if (msg.type === 'text-message') {
-      const attachments: string[] = (msg.attachments || []).filter(isSafeUploadUrl);
+      if (typeof msg.channelId !== 'string') return;
+      if (typeof msg.messageContent !== 'string') return;
+      if (msg.messageContent.length > 4000) return;
+      const channel = Channels.get((c: any) => c.__id === msg.channelId);
+      if (!channel || channel.type !== 'text') return;
+      const rawAttachments = Array.isArray(msg.attachments) ? msg.attachments.slice(0, 10) : [];
+      const attachments: string[] = rawAttachments.filter(isSafeUploadUrl);
       const timestamp = new Date().toISOString();
-      const replyToId = msg.replyToId || null;
+      const replyToId = typeof msg.replyToId === 'string' ? msg.replyToId : null;
       const stored = Messages.create({
         channelId: msg.channelId,
         messageContent: msg.messageContent,

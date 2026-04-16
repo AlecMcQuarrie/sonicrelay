@@ -9,44 +9,95 @@ const jwt = require("jsonwebtoken");
 
 const router = Router();
 
+// Username: 3–32 chars, alphanumeric + underscore. Password: 8–128 chars.
+// signupLocks serializes concurrent signups for the same username — the
+// await on bcrypt.hash below is a yield point where two requests could
+// otherwise both pass the existence check and both create.
+const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,32}$/;
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 128;
+const signupLocks = new Set<string>();
+
 router.post("/signup", async (req: Request, res: Response) => {
-  // If username already exists
-  if (Users.get((x) => x.username === req.body.username)) {
-    return res.sendStatus(500);
+  const username = req.body.username;
+  const password = req.body.password;
+  if (typeof username !== 'string' || !USERNAME_REGEX.test(username)) return res.sendStatus(400);
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) return res.sendStatus(400);
+
+  const lockKey = username.toLowerCase();
+  if (signupLocks.has(lockKey)) return res.sendStatus(409);
+  signupLocks.add(lockKey);
+  try {
+    if (Users.get((x) => x.username === username)) {
+      return res.sendStatus(409);
+    }
+
+    const hashed = await bcrypt.hash(password, +(process.env.SALT || 12));
+
+    const user = {
+      username,
+      password: hashed,
+      profilePhoto: null,
+      voicePeerSettings: null,
+      screenAudioPeerSettings: null,
+      role: 'member' as Role,
+      banned: false,
+      nameColor: null,
+      settings: null,
+      publicKey: req.body.publicKey || null,
+      encryptedPrivateKey: req.body.encryptedPrivateKey || null,
+      pbkdfSalt: req.body.pbkdfSalt || null,
+    };
+    Users.create(user);
+
+    // Tokens intentionally have no expiry — see note on the login handler.
+    const token = jwt.sign(
+      { username: user.username },
+      process.env.ENCRYPTION_KEY,
+    );
+    return res.status(200).json({ accessToken: token });
+  } finally {
+    signupLocks.delete(lockKey);
   }
-
-  // Create user and hash password
-  const password = await bcrypt.hash(req.body.password, +(process.env.SALT || 12));
-
-  const user = {
-    username: req.body.username,
-    password: password,
-    profilePhoto: null,
-    voicePeerSettings: null,
-    screenAudioPeerSettings: null,
-    role: 'member' as Role,
-    banned: false,
-    nameColor: null,
-    settings: null,
-    publicKey: req.body.publicKey || null,
-    encryptedPrivateKey: req.body.encryptedPrivateKey || null,
-    pbkdfSalt: req.body.pbkdfSalt || null,
-  };
-  Users.create(user);
-
-  // Tokens intentionally have no expiry — see note on the login handler.
-  const token = jwt.sign(
-    { username: user.username },
-    process.env.ENCRYPTION_KEY,
-  );
-  return res.status(200).json({ accessToken: token });
 });
 
 // Dummy bcrypt hash used when the username doesn't exist, so login timing
 // and response status don't reveal whether the account is real.
 const DUMMY_HASH = '$2b$12$abcdefghijklmnopqrstuuQ1ZsUQZKJbUeUcZqkQGZb6Y8pxS.xQnW';
 
+// Per-IP sliding-window rate limit on /login. X-Forwarded-For is used when
+// present so a reverse proxy surfaces the real client — spoofable when the
+// server is exposed directly, which is the accepted self-host trade-off.
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX_ATTEMPTS = 5;
+const loginAttempts = new Map<string, number[]>();
+
+function clientIp(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  const first = Array.isArray(xff) ? xff[0] : (xff || '').split(',')[0]?.trim();
+  return first || req.socket.remoteAddress || 'unknown';
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - LOGIN_WINDOW_MS;
+  for (const [ip, times] of loginAttempts) {
+    const kept = times.filter((t) => t >= cutoff);
+    if (kept.length === 0) loginAttempts.delete(ip);
+    else loginAttempts.set(ip, kept);
+  }
+}, LOGIN_WINDOW_MS).unref();
+
 router.post("/login", async (req: Request, res: Response) => {
+  const ip = clientIp(req);
+  const now = Date.now();
+  const recent = (loginAttempts.get(ip) || []).filter((t) => now - t < LOGIN_WINDOW_MS);
+  if (recent.length >= LOGIN_MAX_ATTEMPTS) {
+    res.setHeader('Retry-After', Math.ceil(LOGIN_WINDOW_MS / 1000));
+    return res.sendStatus(429);
+  }
+  recent.push(now);
+  loginAttempts.set(ip, recent);
+
   const user = Users.get((x) => x.username === req.body.username);
   const hash = user ? user.password : DUMMY_HASH;
   const ok = await bcrypt.compare(req.body.password || '', hash);

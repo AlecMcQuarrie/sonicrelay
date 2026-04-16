@@ -84,8 +84,16 @@ export default function ServerJoinForm({ submitForm, defaultServerIP = "" }: Ser
                 className="placeholder:italic"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                maxLength={32}
+                minLength={signupMode ? 3 : undefined}
+                pattern={signupMode ? "[a-zA-Z0-9_]+" : undefined}
                 required
               />
+              {signupMode && (
+                <FieldDescription>
+                  3–32 characters. Letters, numbers, and underscores only.
+                </FieldDescription>
+              )}
             </Field>
             <Field>
               <h3 style={{ textAlign: "left" }}>
@@ -98,8 +106,15 @@ export default function ServerJoinForm({ submitForm, defaultServerIP = "" }: Ser
                 className="placeholder:italic"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                maxLength={128}
+                minLength={signupMode ? 8 : undefined}
                 required
               />
+              {signupMode && (
+                <FieldDescription>
+                  8–128 characters.
+                </FieldDescription>
+              )}
             </Field>
             {error && (
               <p className="text-sm text-red-500 text-center">{error}</p>

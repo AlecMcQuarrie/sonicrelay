@@ -86,24 +86,48 @@ export default function VoiceControls({
         Connected to <span className="font-bold text-foreground">{channelName}</span>
       </div>
       <div className="flex gap-2">
-        <Button variant="ghost" size="sm" onClick={onToggleMute}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleMute}
+          aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+          aria-pressed={isMuted}
+        >
           {isMuted ? <MicOff className="w-4 h-4 text-red-500" /> : <Mic className="w-4 h-4" />}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onToggleDeafen}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleDeafen}
+          aria-label={isDeafened ? "Undeafen" : "Deafen"}
+          aria-pressed={isDeafened}
+        >
           {isDeafened ? <HeadphoneOff className="w-4 h-4 text-red-500" /> : <Headphones className="w-4 h-4" />}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onToggleCamera}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleCamera}
+          aria-label={isCameraOn ? "Turn camera off" : "Turn camera on"}
+          aria-pressed={isCameraOn}
+        >
           {isCameraOn ? <Video className="w-4 h-4 text-red-500" /> : <VideoOff className="w-4 h-4" />}
         </Button>
 
         {isScreenSharing ? (
-          <Button variant="ghost" size="sm" onClick={onStopScreenShare}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onStopScreenShare}
+            aria-label="Stop screen sharing"
+            aria-pressed={true}
+          >
             <ScreenShareOff className="w-4 h-4 text-red-500" />
           </Button>
         ) : (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" size="sm" aria-label="Start screen sharing">
                 <ScreenShare className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -155,7 +179,12 @@ export default function VoiceControls({
           </DropdownMenu>
         )}
 
-        <Button variant="ghost" size="sm" onClick={onDisconnect}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onDisconnect}
+          aria-label="Disconnect from voice"
+        >
           <PhoneOff className="w-4 h-4" />
         </Button>
       </div>

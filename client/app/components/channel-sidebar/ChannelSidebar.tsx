@@ -137,7 +137,7 @@ function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, v
   );
 }
 
-function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () => void }) {
+function PeerVideo({ track, label, onClick }: { track: MediaStreamTrack; label: string; onClick: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -146,7 +146,12 @@ function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () =>
   }, [track]);
 
   return (
-    <div className="aspect-video bg-black rounded overflow-hidden cursor-pointer" onClick={onClick}>
+    <button
+      type="button"
+      aria-label={label}
+      className="aspect-video bg-black rounded overflow-hidden cursor-pointer w-full p-0 border-0"
+      onClick={onClick}
+    >
       <video
         ref={videoRef}
         autoPlay
@@ -154,7 +159,7 @@ function PeerVideo({ track, onClick }: { track: MediaStreamTrack; onClick: () =>
         muted
         className="w-full h-full object-cover"
       />
-    </div>
+    </button>
   );
 }
 
@@ -265,10 +270,18 @@ export default function ChannelSidebar({
                   onScreenAudioMute={onScreenAudioMute}
                 />
                 {videoTracks.has(user) && !focusedFeeds.has(`camera:${user}`) && (
-                  <PeerVideo track={videoTracks.get(user)!} onClick={() => onFocusVideo(`camera:${user}`)} />
+                  <PeerVideo
+                    track={videoTracks.get(user)!}
+                    label={`Focus ${user}'s camera`}
+                    onClick={() => onFocusVideo(`camera:${user}`)}
+                  />
                 )}
                 {screenTracks.has(user) && !focusedFeeds.has(`screen:${user}`) && (
-                  <PeerVideo track={screenTracks.get(user)!} onClick={() => onFocusVideo(`screen:${user}`)} />
+                  <PeerVideo
+                    track={screenTracks.get(user)!}
+                    label={`Focus ${user}'s screen share`}
+                    onClick={() => onFocusVideo(`screen:${user}`)}
+                  />
                 )}
               </div>
             ))}

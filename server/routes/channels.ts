@@ -12,7 +12,7 @@ router.get("/channels", (req: Request, res: Response) => {
 router.post("/channels", (req: Request, res: Response) => {
   const auth = authenticate(req);
   if (!auth) return res.sendStatus(401);
-  if (auth.role === 'member') return res.sendStatus(403);
+  if (auth.role !== 'admin' && auth.role !== 'superadmin') return res.sendStatus(403);
   const { name, type } = req.body;
   if (!name?.trim() || !['text', 'voice'].includes(type)) {
     return res.status(400).json({ error: "Name and type (text/voice) are required" });
@@ -24,6 +24,8 @@ router.post("/channels", (req: Request, res: Response) => {
 // Message endpoint (paginated, cursor-based)
 router.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   if (!authenticate(req)) return res.sendStatus(401);
+  const channel = Channels.get((c: any) => c.__id === req.params.channelId);
+  if (!channel) return res.sendStatus(404);
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
   const before = req.query.before as string | undefined;
 
