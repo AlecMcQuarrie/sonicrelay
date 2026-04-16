@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Camera } from "lucide-react";
+import { Camera, Check, Download, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
 import { Button } from "~/components/ui/button";
 import PhotoCropModal from "../PhotoCropModal";
@@ -121,7 +121,7 @@ export default function AccountTab({
           </div>
         </div>
         <ThemePicker settings={settings} updateSettings={updateSettings} />
-        <p className="text-xs text-muted-foreground text-center pt-2">v{__APP_VERSION__}</p>
+        <UpdateCheck />
       </div>
       {cropImage && (
         <PhotoCropModal
@@ -132,5 +132,143 @@ export default function AccountTab({
         />
       )}
     </>
+  );
+}
+
+type UpdateState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "available"; version: string; releaseUrl: string }
+  | { status: "downloading"; percent: number }
+  | { status: "ready"; filePath: string }
+  | { status: "up-to-date" }
+  | { status: "error"; message: string };
+
+function UpdateCheck() {
+  const api = window.electronAPI;
+  const [state, setState] = useState<UpdateState>({ status: "idle" });
+
+  useEffect(() => {
+    if (!api) return;
+    return api.onDownloadProgress((percent) => {
+      setState((prev) =>
+        prev.status === "downloading" || prev.status === "available"
+          ? { status: "downloading", percent }
+          : prev
+      );
+    });
+  }, [api]);
+
+  if (!api) {
+    return <p className="text-xs text-muted-foreground text-center pt-2">v{__APP_VERSION__}</p>;
+  }
+
+  const check = async () => {
+    setState({ status: "checking" });
+    try {
+      const info = await api.checkForUpdate();
+      if (info) {
+        setState({ status: "available", version: info.version, releaseUrl: info.releaseUrl });
+      } else {
+        setState({ status: "up-to-date" });
+      }
+    } catch {
+      setState({ status: "error", message: "Could not check for updates" });
+    }
+  };
+
+  const download = async () => {
+    setState({ status: "downloading", percent: 0 });
+    const result = await api.downloadUpdate();
+    if (result.success && result.filePath) {
+      setState({ status: "ready", filePath: result.filePath });
+    } else {
+      setState({ status: "error", message: result.error || "Download failed" });
+    }
+  };
+
+  const install = () => {
+    if (state.status === "ready") api.installUpdate(state.filePath);
+  };
+
+  return (
+    <div className="border-t pt-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">v{__APP_VERSION__}</span>
+        {(state.status === "idle" || state.status === "up-to-date" || state.status === "error") && (
+          <button
+            onClick={check}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Check for Updates
+          </button>
+        )}
+        {state.status === "checking" && (
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Checking...
+          </span>
+        )}
+      </div>
+
+      {state.status === "up-to-date" && (
+        <p className="flex items-center gap-1.5 text-xs text-green-500">
+          <Check className="h-3 w-3" />
+          You're up to date
+        </p>
+      )}
+
+      {state.status === "error" && (
+        <p className="text-xs text-destructive">{state.message}</p>
+      )}
+
+      {state.status === "available" && (
+        <div className="flex items-center gap-2 text-xs">
+          <span><strong>v{state.version}</strong> available</span>
+          <button
+            onClick={download}
+            className="flex items-center gap-1 rounded bg-primary text-primary-foreground px-2 py-0.5 font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Download className="h-3 w-3" />
+            Download
+          </button>
+          <button
+            onClick={() => api.openReleasePage(state.releaseUrl)}
+            className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Notes
+          </button>
+        </div>
+      )}
+
+      {state.status === "downloading" && (
+        <div className="flex items-center gap-2 text-xs">
+          <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
+          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300"
+              style={{ width: `${state.percent}%` }}
+            />
+          </div>
+          <span className="text-muted-foreground tabular-nums">{state.percent}%</span>
+        </div>
+      )}
+
+      {state.status === "ready" && (
+        <div className="flex items-center gap-2 text-xs">
+          <Download className="h-3 w-3 text-green-500 shrink-0" />
+          <span>Ready to install</span>
+          <button
+            onClick={install}
+            className="flex items-center gap-1 rounded bg-green-600 text-white px-2 py-0.5 font-medium hover:bg-green-500 transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Install & Restart
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
