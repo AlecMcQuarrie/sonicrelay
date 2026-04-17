@@ -28,6 +28,24 @@ router.get("/channels/:channelId/messages", (req: Request, res: Response) => {
   if (!channel) return res.sendStatus(404);
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
   const before = req.query.before as string | undefined;
+  const after = req.query.after as string | undefined;
+
+  if (before && after) {
+    return res.status(400).json({ error: "before and after are mutually exclusive" });
+  }
+
+  if (after) {
+    const afterMsg = Messages.get((m: any) => m.__id === after);
+    if (!afterMsg) return res.status(400).json({ error: "invalid cursor" });
+    const afterCap = 500;
+    const newer = Messages.getAll()
+      .filter((m: any) => m.channelId === req.params.channelId && m.timestamp > (afterMsg as any).timestamp)
+      .sort((a: any, b: any) => (a as any).timestamp.localeCompare((b as any).timestamp)); // oldest first
+    return res.status(200).json({
+      messages: newer.slice(0, afterCap),
+      hasMore: newer.length > afterCap,
+    });
+  }
 
   let all = Messages.getAll()
     .filter((m: any) => m.channelId === req.params.channelId)

@@ -25,6 +25,8 @@ import useDmState from "~/hooks/useDmState";
 import useNotifications from "~/hooks/useNotifications";
 import type { StoredConnection } from "~/lib/auth";
 import { useConnectionManager } from "~/lib/connectionManager";
+import { MessageCacheStore, channelKey, dmKey, type ChannelCacheEntry } from "~/lib/messageCache";
+import { decrypt } from "~/lib/crypto";
 
 type Channel = {
   name: string;
@@ -117,6 +119,20 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   );
   const readDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const didAutoSelectRef = useRef(false);
+
+  // Per-channel/DM message cache so switching back to a visited conversation
+  // renders instantly. Live WS messages update it; reconnects fetch ?after=<id>
+  // to fill any gap; LRU-evicts the oldest non-active conversation past max.
+  const messageCacheRef = useRef<MessageCacheStore>(new MessageCacheStore(10));
+  const [cacheVersion, setCacheVersion] = useState(0);
+  const bumpCache = useCallback(() => setCacheVersion((v) => v + 1), []);
+  const currentCacheKeyRef = useRef<string | null>(null);
+  currentCacheKeyRef.current = selectedDmPartner
+    ? dmKey(selectedDmPartner)
+    : selectedTextChannelId
+      ? channelKey(selectedTextChannelId)
+      : null;
+  const [wsStatus, setWsStatus] = useState<'open' | 'reconnecting'>('open');
 
   const protocol = getProtocol(serverIP);
 
@@ -225,102 +241,10 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       .then((res) => res.json())
       .then((data) => initUnreads(data.unreads || {}));
 
-    const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
-    wsRef.current = ws;
-
-    // Initialize voice client
-    const cachedSettings = loadCachedSettings();
-    voiceRef.current = new VoiceClient(ws, {
-      onPeerJoined: (channelId, user) => {
-        setVoicePeers((prev) => {
-          const current = prev[channelId] || [];
-          if (current.includes(user)) return prev;
-          return { ...prev, [channelId]: [...current, user] };
-        });
-        // Apply saved volume/mute settings once audio element is ready
-        setTimeout(() => {
-          const s = voicePeerSettingsRef.current[user];
-          if (s) {
-            voiceRef.current?.setUserVolume(user, s.volume);
-            voiceRef.current?.setUserMuted(user, s.muted);
-          }
-        }, 500);
-      },
-      onPeerLeft: (channelId, user) => {
-        setVoicePeers((prev) => ({
-          ...prev,
-          [channelId]: (prev[channelId] || []).filter((u) => u !== user),
-        }));
-      },
-      onSpeakingChange: (user, isSpeaking) => {
-        setSpeakingUsers((prev) => {
-          const next = new Set(prev);
-          if (isSpeaking) next.add(user);
-          else next.delete(user);
-          return next;
-        });
-      },
-      onVideoTrack: (user, track) => {
-        setVideoTracks((prev) => {
-          const next = new Map(prev);
-          if (track) next.set(user, track);
-          else {
-            next.delete(user);
-            setFocusedVideoUsers((prev) => {
-              const key = `camera:${user}`;
-              if (!prev.has(key)) return prev;
-              const next = new Set(prev);
-              next.delete(key);
-              return next;
-            });
-          }
-          return next;
-        });
-      },
-      onScreenTrack: (user, track) => {
-        setScreenTracks((prev) => {
-          const next = new Map(prev);
-          if (track) next.set(user, track);
-          else {
-            next.delete(user);
-            setFocusedVideoUsers((prev) => {
-              const key = `screen:${user}`;
-              if (!prev.has(key)) return prev;
-              const next = new Set(prev);
-              next.delete(key);
-              return next;
-            });
-          }
-          return next;
-        });
-        // Sync isScreenSharing for local user
-        if (user === username) setIsScreenSharing(!!track);
-      },
-      onSessionSuperseded: () => {
-        voiceRef.current?.leave(false);
-        setVoiceChannelId(null);
-      },
-      onScreenAudioChange: (user, available) => {
-        setScreenAudioUsers((prev) => {
-          const next = new Set(prev);
-          if (available) next.add(user);
-          else next.delete(user);
-          return next;
-        });
-        if (available) {
-          setTimeout(() => {
-            const s = screenAudioPeerSettingsRef.current[user];
-            if (s) {
-              voiceRef.current?.setScreenAudioVolume(user, s.volume);
-              voiceRef.current?.setScreenAudioMuted(user, s.muted);
-            }
-          }, 500);
-        }
-      },
-    });
-    // Apply cached settings immediately so the first call uses last-known
-    // values. The /me/settings fetch above will overwrite when it resolves.
-    applyVoiceSettings(voiceRef.current, cachedSettings);
+    let unmounting = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let firstConnect = true;
 
     // Handle server pushes for voice state and presence
     const handleServerMessages = (event: MessageEvent) => {
@@ -385,21 +309,57 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       if (msg.type === 'name-color-changed') {
         setNameColors((prev) => ({ ...prev, [msg.username]: msg.nameColor }));
       }
-      if (msg.type === 'text-message' && msg.sender !== username) {
-        const activelyViewing =
-          msg.channelId === selectedTextChannelIdRef.current &&
-          windowFocusedRef.current;
-        if (activelyViewing) {
-          markRead(msg.channelId);
-        } else {
-          incrementUnread(msg.channelId);
-          const ch = channelsRef.current.find((c) => c.__id === msg.channelId);
-          notify(`#${ch?.name ?? 'channel'}`, `${msg.sender}: ${msg.messageContent}`);
+      if (msg.type === 'text-message') {
+        // Keep cache live for any cached channel (including the active one and
+        // messages the user sent — the server echoes self-sent back to us).
+        const key = channelKey(msg.channelId);
+        if (messageCacheRef.current.has(key)) {
+          messageCacheRef.current.appendMessage(key, msg, currentCacheKeyRef.current ?? undefined);
+          bumpCache();
         }
+        if (msg.sender !== username) {
+          const activelyViewing =
+            msg.channelId === selectedTextChannelIdRef.current &&
+            windowFocusedRef.current;
+          if (activelyViewing) {
+            markRead(msg.channelId);
+          } else {
+            incrementUnread(msg.channelId);
+            const ch = channelsRef.current.find((c) => c.__id === msg.channelId);
+            notify(`#${ch?.name ?? 'channel'}`, `${msg.sender}: ${msg.messageContent}`);
+          }
+        }
+      }
+      if (msg.type === 'delete-message') {
+        messageCacheRef.current.removeMessageEverywhere(msg.messageId);
+        bumpCache();
       }
       if (msg.type === 'dm-message') {
         handleIncomingDm(msg);
         const partner = msg.sender === username ? msg.recipient : msg.sender;
+        const key = dmKey(partner);
+        const cached = messageCacheRef.current.peek(key);
+        if (cached?.sharedKey) {
+          // Decrypt using the cached shared key so cached-but-not-viewed DMs
+          // stay fresh for when the user returns.
+          decrypt(cached.sharedKey, msg.iv, msg.ciphertext)
+            .then((text) => {
+              messageCacheRef.current.appendMessage(
+                key,
+                {
+                  __id: msg.__id,
+                  sender: msg.sender,
+                  text,
+                  timestamp: msg.timestamp,
+                  attachments: msg.attachments || [],
+                  replyToId: msg.replyToId ?? null,
+                },
+                currentCacheKeyRef.current ?? undefined,
+              );
+              bumpCache();
+            })
+            .catch(() => {});
+        }
         if (msg.sender !== username) {
           const activelyViewing =
             partner === selectedDmPartnerRef.current && windowFocusedRef.current;
@@ -410,6 +370,10 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
             notify(`DM from ${msg.sender}`, 'New message');
           }
         }
+      }
+      if (msg.type === 'dm-delete-message') {
+        messageCacheRef.current.removeMessageEverywhere(msg.messageId);
+        bumpCache();
       }
       if (msg.type === 'user-banned') {
         setAllUsers((prev) => prev.filter((u) => u !== msg.username));
@@ -425,12 +389,189 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         });
       }
     };
-    ws.addEventListener('message', handleServerMessages);
+
+    const fetchMissedForCachedConversations = async () => {
+      const entries: Array<[string, ChannelCacheEntry]> = [];
+      messageCacheRef.current.forEach((k, v) => entries.push([k, v]));
+      for (const [key, entry] of entries) {
+        const last = entry.messages[entry.messages.length - 1];
+        if (!last?.__id) continue;
+        const url = key.startsWith('ch:')
+          ? `${protocol}://${serverIP}/channels/${key.slice(3)}/messages?after=${last.__id}`
+          : `${protocol}://${serverIP}/dm/messages/${encodeURIComponent(key.slice(3))}?after=${last.__id}`;
+        try {
+          const res = await fetch(url, { headers: { 'access-token': accessToken } });
+          if (!res.ok) { messageCacheRef.current.invalidate(key); continue; }
+          const data = await res.json();
+          if (data.hasMore) {
+            // More than the cap was missed — drop the cache entry so the
+            // next view does a fresh fetch-from-latest.
+            messageCacheRef.current.invalidate(key);
+            continue;
+          }
+          if (key.startsWith('dm:')) {
+            if (!entry.sharedKey) { messageCacheRef.current.invalidate(key); continue; }
+            const decrypted: any[] = [];
+            for (const m of data.messages) {
+              try {
+                const text = await decrypt(entry.sharedKey, m.iv, m.ciphertext);
+                decrypted.push({
+                  __id: m.__id, sender: m.sender, text, timestamp: m.timestamp,
+                  attachments: m.attachments || [], replyToId: m.replyToId ?? null,
+                });
+              } catch { /* skip */ }
+            }
+            messageCacheRef.current.appendMany(key, decrypted, currentCacheKeyRef.current ?? undefined);
+          } else {
+            messageCacheRef.current.appendMany(key, data.messages, currentCacheKeyRef.current ?? undefined);
+          }
+        } catch {
+          // Network error — leave the cache as-is; live WS updates will
+          // eventually fill the gap for messages that arrive from now on.
+        }
+      }
+      bumpCache();
+    };
+
+    const connect = () => {
+      const ws = new WebSocket(`${wsProtocol}://${serverIP}?token=${accessToken}`);
+      wsRef.current = ws;
+
+      // Re-initialize the voice client on each (re)connect — VoiceClient
+      // captures its WebSocket in its constructor, so a fresh socket needs a
+      // fresh VoiceClient. The old one, if any, is destroyed first.
+      voiceRef.current?.destroy();
+      const cachedSettings = loadCachedSettings();
+      voiceRef.current = new VoiceClient(ws, {
+        onPeerJoined: (channelId, user) => {
+          setVoicePeers((prev) => {
+            const current = prev[channelId] || [];
+            if (current.includes(user)) return prev;
+            return { ...prev, [channelId]: [...current, user] };
+          });
+          // Apply saved volume/mute settings once audio element is ready
+          setTimeout(() => {
+            const s = voicePeerSettingsRef.current[user];
+            if (s) {
+              voiceRef.current?.setUserVolume(user, s.volume);
+              voiceRef.current?.setUserMuted(user, s.muted);
+            }
+          }, 500);
+        },
+        onPeerLeft: (channelId, user) => {
+          setVoicePeers((prev) => ({
+            ...prev,
+            [channelId]: (prev[channelId] || []).filter((u) => u !== user),
+          }));
+        },
+        onSpeakingChange: (user, isSpeaking) => {
+          setSpeakingUsers((prev) => {
+            const next = new Set(prev);
+            if (isSpeaking) next.add(user);
+            else next.delete(user);
+            return next;
+          });
+        },
+        onVideoTrack: (user, track) => {
+          setVideoTracks((prev) => {
+            const next = new Map(prev);
+            if (track) next.set(user, track);
+            else {
+              next.delete(user);
+              setFocusedVideoUsers((prev) => {
+                const key = `camera:${user}`;
+                if (!prev.has(key)) return prev;
+                const next = new Set(prev);
+                next.delete(key);
+                return next;
+              });
+            }
+            return next;
+          });
+        },
+        onScreenTrack: (user, track) => {
+          setScreenTracks((prev) => {
+            const next = new Map(prev);
+            if (track) next.set(user, track);
+            else {
+              next.delete(user);
+              setFocusedVideoUsers((prev) => {
+                const key = `screen:${user}`;
+                if (!prev.has(key)) return prev;
+                const next = new Set(prev);
+                next.delete(key);
+                return next;
+              });
+            }
+            return next;
+          });
+          // Sync isScreenSharing for local user
+          if (user === username) setIsScreenSharing(!!track);
+        },
+        onSessionSuperseded: () => {
+          voiceRef.current?.leave(false);
+          setVoiceChannelId(null);
+        },
+        onScreenAudioChange: (user, available) => {
+          setScreenAudioUsers((prev) => {
+            const next = new Set(prev);
+            if (available) next.add(user);
+            else next.delete(user);
+            return next;
+          });
+          if (available) {
+            setTimeout(() => {
+              const s = screenAudioPeerSettingsRef.current[user];
+              if (s) {
+                voiceRef.current?.setScreenAudioVolume(user, s.volume);
+                voiceRef.current?.setScreenAudioMuted(user, s.muted);
+              }
+            }, 500);
+          }
+        },
+      });
+      // Apply cached settings immediately so the first call uses last-known
+      // values. The /me/settings fetch above will overwrite when it resolves.
+      applyVoiceSettings(voiceRef.current, cachedSettings);
+
+      ws.addEventListener('open', () => {
+        attempt = 0;
+        setWsStatus('open');
+        if (!firstConnect) {
+          void fetchMissedForCachedConversations();
+        }
+        firstConnect = false;
+      });
+
+      ws.addEventListener('close', () => {
+        if (unmounting) return;
+        setWsStatus('reconnecting');
+        // Server drops the user from voice on disconnect; reflect in the UI.
+        setVoiceChannelId(null);
+        setVoicePeers({});
+        setSpeakingUsers(new Set());
+        setVideoTracks(new Map());
+        setScreenTracks(new Map());
+        setScreenAudioUsers(new Set());
+        setFocusedVideoUsers(new Set());
+        // Exponential backoff capped at 30s, with ±20% jitter so a mass
+        // reconnect (e.g., server restart) doesn't thundering-herd.
+        const base = Math.min(30_000, 500 * 2 ** attempt++);
+        const jitter = base * (0.8 + Math.random() * 0.4);
+        reconnectTimer = setTimeout(connect, jitter);
+      });
+
+      ws.addEventListener('message', handleServerMessages);
+    };
+
+    connect();
 
     return () => {
+      unmounting = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       voiceRef.current?.leave();
       voiceRef.current?.destroy();
-      ws.close();
+      wsRef.current?.close();
     };
   }, [serverIP, accessToken]);
 
@@ -922,9 +1063,13 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
                 uploadToken={uploadToken}
                 username={username}
                 wsRef={wsRef}
+                wsStatus={wsStatus}
                 profilePhotos={profilePhotos}
                 privateKey={privateKey}
                 partnerPublicKey={publicKeys[selectedDmPartner]}
+                cache={messageCacheRef.current}
+                cacheVersion={cacheVersion}
+                bumpCache={bumpCache}
               />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
@@ -942,10 +1087,14 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
               uploadToken={uploadToken}
               username={username}
               wsRef={wsRef}
+              wsStatus={wsStatus}
               profilePhotos={profilePhotos}
               nameColors={nameColors}
               myRole={myRole}
               onStartDm={startDm}
+              cache={messageCacheRef.current}
+              cacheVersion={cacheVersion}
+              bumpCache={bumpCache}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-muted-foreground">

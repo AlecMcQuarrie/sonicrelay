@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { ShieldCheck, X, FileIcon, Trash2, ArrowDown, Reply, CornerUpLeft } from "lucide-react";
 import Avatar from "~/components/ui/avatar";
@@ -12,7 +12,7 @@ import { cn } from "~/lib/utils";
 import { importPublicKey, deriveSharedSecret, encrypt, decrypt, encryptFile } from "~/lib/crypto";
 import { getProtocol, buildUploadUrl } from "~/lib/protocol";
 import { preloadAllMedia } from "~/lib/preload-media";
-import type { OgData } from "~/lib/preload-media";
+import { dmKey, type MessageCacheStore } from "~/lib/messageCache";
 
 type DecryptedMessage = {
   __id: string;
@@ -30,9 +30,13 @@ interface DirectMessageProps {
   uploadToken: string | null;
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
+  wsStatus: 'open' | 'reconnecting';
   profilePhotos: Record<string, string | null>;
   privateKey: CryptoKey;
   partnerPublicKey: string;
+  cache: MessageCacheStore;
+  cacheVersion: number;
+  bumpCache: () => void;
 }
 
 export default function DirectMessage({
@@ -42,42 +46,51 @@ export default function DirectMessage({
   uploadToken,
   username,
   wsRef,
+  wsStatus,
   profilePhotos,
   privateKey,
   partnerPublicKey,
+  cache,
+  cacheVersion,
+  bumpCache,
 }: DirectMessageProps) {
-  const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [input, setInput] = useState("");
-  const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-  const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
   const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
-  const [replyCache, setReplyCache] = useState<Map<string, DecryptedMessage | 'deleted'>>(new Map());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
-  const sharedKeyRef = useRef<CryptoKey | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inFlightKeysRef = useRef<Set<string>>(new Set());
+  const prevPartnerRef = useRef<string | null>(null);
 
   const protocol = getProtocol(serverIP);
+  const key = dmKey(partner);
+
+  const entry = useMemo(() => cache.get(key), [cache, key, cacheVersion]);
+  const messages = (entry?.messages ?? []) as DecryptedMessage[];
+  const hasMore = entry?.hasMore ?? false;
+  const ogCache = entry?.ogCache ?? new Map();
+  const replyCache = entry?.replyCache ?? new Map();
+  const sharedKey = entry?.sharedKey ?? null;
+  const initialLoading = !entry;
 
   async function decryptMessages(
     encrypted: { __id: string; sender: string; iv: string; ciphertext: string; timestamp: string; attachments?: string[]; replyToId?: string | null }[],
-    sharedKey: CryptoKey,
+    key: CryptoKey,
   ): Promise<DecryptedMessage[]> {
     const results: DecryptedMessage[] = [];
     for (const msg of encrypted) {
       try {
-        const text = await decrypt(sharedKey, msg.iv, msg.ciphertext);
+        const text = await decrypt(key, msg.iv, msg.ciphertext);
         results.push({
           __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp,
           attachments: msg.attachments || [], replyToId: msg.replyToId ?? null,
@@ -92,73 +105,60 @@ export default function DirectMessage({
     return results;
   }
 
-  // Derive the shared secret and load initial messages
+  // Derive the shared secret and load initial messages — only on cache miss.
   useEffect(() => {
-    setMessages([]);
-    setHasMore(false);
-    setInitialLoading(true);
-    setReplyingTo(null);
-    setReplyCache(new Map());
-    sharedKeyRef.current = null;
-
-    async function init() {
-      const theirPubKey = await importPublicKey(partnerPublicKey);
-      const sharedKey = await deriveSharedSecret(privateKey, theirPubKey);
-      sharedKeyRef.current = sharedKey;
-
-      const res = await fetch(`${protocol}://${serverIP}/dm/messages/${partner}?limit=50`, {
-        headers: { "access-token": accessToken },
-      });
-      const data = await res.json();
-      const decrypted = await decryptMessages(data.messages, sharedKey);
-      const cache = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
-      setOgCache(cache);
-      setMessages(decrypted);
-      setHasMore(data.hasMore);
-      setInitialLoading(false);
-    }
-    init();
-  }, [partner, partnerPublicKey, privateKey, accessToken]);
-
-  // Listen for incoming DMs from this partner
-  useEffect(() => {
-    const ws = wsRef.current;
-    if (!ws) return;
-
-    const handler = async (event: MessageEvent) => {
-      const msg = JSON.parse(event.data);
-
-      if (msg.type === 'dm-delete-message') {
-        setMessages((prev) => prev.filter((m) => m.__id !== msg.messageId));
-        return;
-      }
-
-      if (msg.type !== "dm-message") return;
-
-      const isFromPartner = msg.sender === partner;
-      const isEcho = msg.sender === username && msg.recipient === partner;
-      if (!isFromPartner && !isEcho) return;
-
-      const sharedKey = sharedKeyRef.current;
-      if (!sharedKey) return;
-
+    if (cache.has(key)) return;
+    if (inFlightKeysRef.current.has(key)) return;
+    inFlightKeysRef.current.add(key);
+    (async () => {
       try {
-        const text = await decrypt(sharedKey, msg.iv, msg.ciphertext);
-        setMessages((prev) => {
-          if (prev.some((m) => m.__id === msg.__id)) return prev;
-          return [...prev, {
-            __id: msg.__id, sender: msg.sender, text, timestamp: msg.timestamp,
-            attachments: msg.attachments || [], replyToId: msg.replyToId ?? null,
-          }];
+        const theirPubKey = await importPublicKey(partnerPublicKey);
+        const derivedKey = await deriveSharedSecret(privateKey, theirPubKey);
+        const res = await fetch(`${protocol}://${serverIP}/dm/messages/${partner}?limit=50`, {
+          headers: { "access-token": accessToken },
         });
-      } catch {
-        // Decryption failed — ignore
+        const data = await res.json();
+        const decrypted = await decryptMessages(data.messages, derivedKey);
+        const og = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
+        const last = decrypted.length > 0 ? decrypted[decrypted.length - 1] : null;
+        cache.set(key, {
+          messages: decrypted,
+          hasMore: data.hasMore,
+          ogCache: og,
+          replyCache: new Map(),
+          lastSeenMessageId: last?.__id ?? null,
+          scrollTop: 0,
+          sharedKey: derivedKey,
+        }, key);
+        bumpCache();
+      } finally {
+        inFlightKeysRef.current.delete(key);
       }
-    };
+    })();
+  }, [key, cache, bumpCache, partner, partnerPublicKey, privateKey, accessToken, protocol, serverIP, uploadToken]);
 
-    ws.addEventListener("message", handler);
-    return () => ws.removeEventListener("message", handler);
-  }, [partner, username]);
+  useEffect(() => {
+    setReplyingTo(null);
+  }, [partner]);
+
+  // Save scroll position on partner change so we restore it on return.
+  useEffect(() => {
+    prevPartnerRef.current = partner;
+    return () => {
+      const prev = prevPartnerRef.current;
+      const container = scrollContainerRef.current;
+      if (prev && container) cache.updateScrollTop(dmKey(prev), container.scrollTop);
+    };
+  }, [partner, cache]);
+
+  useLayoutEffect(() => {
+    if (!entry) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (container.scrollTop === entry.scrollTop) return;
+    container.scrollTop = entry.scrollTop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partner, initialLoading]);
 
   // Infinite scroll for older messages
   useEffect(() => {
@@ -176,9 +176,7 @@ export default function DirectMessage({
   }, [hasMore, messages.length]);
 
   const loadOlder = useCallback(async () => {
-    if (loadingRef.current || !hasMore || messages.length === 0) return;
-    const sharedKey = sharedKeyRef.current;
-    if (!sharedKey) return;
+    if (loadingRef.current || !hasMore || messages.length === 0 || !sharedKey) return;
 
     loadingRef.current = true;
     setLoadingMore(true);
@@ -194,13 +192,8 @@ export default function DirectMessage({
       const decrypted = await decryptMessages(data.messages, sharedKey);
       const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
 
-      setOgCache((prev) => {
-        const merged = new Map(prev);
-        newOgEntries.forEach((v, k) => merged.set(k, v));
-        return merged;
-      });
-      setMessages((prev) => [...decrypted, ...prev]);
-      setHasMore(data.hasMore);
+      cache.prependPage(key, decrypted, data.hasMore, newOgEntries);
+      bumpCache();
     } catch {
       // Network error — allow retry
     } finally {
@@ -213,26 +206,34 @@ export default function DirectMessage({
         }
       });
     }
-  }, [hasMore, messages, partner, accessToken]);
+  }, [hasMore, messages, partner, accessToken, sharedKey, cache, key, bumpCache, protocol, serverIP, uploadToken]);
 
-  // Track scroll position for jump-to-bottom button
+  // Scroll tracking: jump-to-bottom button + clearing the new-message banner
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    const onScroll = () => setShowJumpToBottom(container.scrollTop < -100);
+    const onScroll = () => {
+      setShowJumpToBottom(container.scrollTop < -100);
+      if (container.scrollTop >= -5) {
+        const latest = messages[messages.length - 1]?.__id;
+        if (latest && cache.has(key)) {
+          cache.updateLastSeen(key, latest);
+          bumpCache();
+        }
+      }
+    };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [messages, cache, key, bumpCache]);
 
   const jumpToBottom = () => {
     const container = scrollContainerRef.current;
     if (container) container.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Fetch reply targets — decrypt them client-side
+  // Fetch reply targets — decrypt them client-side, stash in the cache
   useEffect(() => {
-    const sharedKey = sharedKeyRef.current;
-    if (!sharedKey) return;
+    if (!sharedKey || !entry) return;
 
     const missingIds = messages
       .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
@@ -245,22 +246,25 @@ export default function DirectMessage({
         headers: { "access-token": accessToken },
       }).then(async (res) => {
         if (res.status === 404) {
-          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+          cache.updateReplyCache(key, id, 'deleted');
+          bumpCache();
         } else if (res.ok) {
           const data = await res.json();
           try {
             const text = await decrypt(sharedKey, data.iv, data.ciphertext);
-            setReplyCache((prev) => new Map(prev).set(id, {
+            cache.updateReplyCache(key, id, {
               __id: data.__id, sender: data.sender, text, timestamp: data.timestamp,
               attachments: data.attachments || [], replyToId: data.replyToId ?? null,
-            }));
+            });
+            bumpCache();
           } catch {
-            setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+            cache.updateReplyCache(key, id, 'deleted');
+            bumpCache();
           }
         }
       }).catch(() => {});
     }
-  }, [messages, replyCache, protocol, serverIP, accessToken]);
+  }, [messages, replyCache, protocol, serverIP, accessToken, sharedKey, entry, cache, key, bumpCache]);
 
   const startReply = (msg: DecryptedMessage) => {
     setReplyingTo(msg);
@@ -274,9 +278,7 @@ export default function DirectMessage({
 
   const jumpToMessage = useCallback(async (targetId: string) => {
     const container = scrollContainerRef.current;
-    if (!container) return;
-    const sharedKey = sharedKeyRef.current;
-    if (!sharedKey) return;
+    if (!container || !sharedKey) return;
 
     const existing = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
     if (existing) {
@@ -307,13 +309,8 @@ export default function DirectMessage({
       const newOgEntries = await preloadAllMedia(decrypted.map((m) => ({ text: m.text })), protocol, serverIP, accessToken, uploadToken);
 
       flushSync(() => {
-        setOgCache((prev) => {
-          const merged = new Map(prev);
-          newOgEntries.forEach((v, k) => merged.set(k, v));
-          return merged;
-        });
-        setMessages((prev) => [...decrypted, ...prev]);
-        setHasMore(data.hasMore);
+        cache.prependPage(key, decrypted, data.hasMore, newOgEntries);
+        bumpCache();
       });
 
       currentMessages = [...decrypted, ...currentMessages];
@@ -356,21 +353,20 @@ export default function DirectMessage({
         observerRef.current.observe(sentinel);
       }
     });
-  }, [messages, hasMore, partner, accessToken, serverIP, protocol, highlightMessage]);
+  }, [messages, hasMore, partner, accessToken, sharedKey, protocol, serverIP, uploadToken, highlightMessage, cache, key, bumpCache]);
 
   const sendMessage = useCallback(async () => {
     if (!input.trim() && pendingFiles.length === 0) return;
-    if (!sharedKeyRef.current) return;
+    if (!sharedKey) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     try {
       setUploading(true);
 
-      // Encrypt and upload each file individually
       const attachments: string[] = [];
       for (const file of pendingFiles) {
         const arrayBuffer = await file.arrayBuffer();
-        const { iv: fileIv, encrypted } = await encryptFile(sharedKeyRef.current, arrayBuffer);
+        const { iv: fileIv, encrypted } = await encryptFile(sharedKey, arrayBuffer);
         const formData = new FormData();
         formData.append('files', new Blob([encrypted]), 'encrypted.enc');
         const res = await fetch(`${protocol}://${serverIP}/upload`, {
@@ -384,7 +380,7 @@ export default function DirectMessage({
 
       setUploading(false);
 
-      const { iv, ciphertext } = await encrypt(sharedKeyRef.current, input);
+      const { iv, ciphertext } = await encrypt(sharedKey, input);
       wsRef.current.send(JSON.stringify({
         type: "dm-message",
         recipient: partner,
@@ -399,7 +395,7 @@ export default function DirectMessage({
     } catch {
       setUploading(false);
     }
-  }, [input, pendingFiles, partner, wsRef, replyingTo]);
+  }, [input, pendingFiles, partner, wsRef, replyingTo, sharedKey, protocol, serverIP, accessToken]);
 
   const deleteMessage = (messageId: string) => {
     if (!wsRef.current) return;
@@ -415,6 +411,21 @@ export default function DirectMessage({
   const removePendingFile = (index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   };
+
+  const newMessageCount = useMemo(() => {
+    const lastSeen = entry?.lastSeenMessageId;
+    if (!lastSeen) return 0;
+    let count = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const id = messages[i].__id;
+      if (!id || id === lastSeen) break;
+      count++;
+    }
+    return count;
+  }, [messages, entry?.lastSeenMessageId]);
+
+  const reconnecting = wsStatus === 'reconnecting';
+  const canSend = (!!input.trim() || pendingFiles.length > 0) && !uploading && !reconnecting;
 
   const partnerPhoto = profilePhotos[partner];
   const partnerPhotoUrl = partnerPhoto && uploadToken ? buildUploadUrl(partnerPhoto, serverIP, uploadToken) : null;
@@ -457,7 +468,7 @@ export default function DirectMessage({
             const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
 
             const replyTarget = msg.replyToId
-              ? messages.find((m) => m.__id === msg.replyToId) || replyCache.get(msg.replyToId) || null
+              ? messages.find((m) => m.__id === msg.replyToId) || (replyCache.get(msg.replyToId) as DecryptedMessage | 'deleted' | undefined) || null
               : null;
 
             return (
@@ -515,8 +526,8 @@ export default function DirectMessage({
                         ogCache={ogCache}
                       />
                     )}
-                    {msg.attachments.length > 0 && sharedKeyRef.current && (
-                      <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKeyRef.current} serverIP={serverIP} accessToken={accessToken} />
+                    {msg.attachments.length > 0 && sharedKey && (
+                      <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKey} serverIP={serverIP} accessToken={accessToken} />
                     )}
                   </div>
                   <div className="flex gap-0.5 shrink-0 mt-1">
@@ -581,6 +592,17 @@ export default function DirectMessage({
         )}
       </div>
 
+      {/* New messages banner */}
+      {newMessageCount > 0 && (
+        <button
+          onClick={jumpToBottom}
+          className="mx-4 mt-1 flex items-center justify-center gap-1.5 px-3 py-1 rounded-md bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors cursor-pointer"
+        >
+          <ArrowDown className="w-3 h-3" />
+          {newMessageCount} new message{newMessageCount === 1 ? '' : 's'}
+        </button>
+      )}
+
       {/* Pending file previews */}
       {pendingFiles.length > 0 && (
         <div className="px-4 flex gap-2 flex-wrap">
@@ -629,6 +651,14 @@ export default function DirectMessage({
         </div>
       )}
 
+      {/* Reconnecting indicator */}
+      {reconnecting && (
+        <div className="px-4 py-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <div className="w-2 h-2 border border-current border-t-transparent rounded-full animate-spin" />
+          Reconnecting…
+        </div>
+      )}
+
       {/* Input */}
       <input
         ref={fileInputRef}
@@ -641,8 +671,8 @@ export default function DirectMessage({
         value={input}
         onChange={setInput}
         onSend={sendMessage}
-        placeholder={`Message ${partner}`}
-        canSend={(!!input.trim() || pendingFiles.length > 0) && !uploading}
+        placeholder={reconnecting ? 'Reconnecting…' : `Message ${partner}`}
+        canSend={canSend}
         onPaste={(files) => setPendingFiles((prev) => [...prev, ...files])}
         onAttachClick={() => fileInputRef.current?.click()}
         inputRef={textareaRef}

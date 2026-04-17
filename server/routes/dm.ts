@@ -24,6 +24,25 @@ router.get("/dm/messages/:partner", (req: Request, res: Response) => {
   const conversationId = [auth.username, req.params.partner].sort().join(':');
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
   const before = req.query.before as string | undefined;
+  const after = req.query.after as string | undefined;
+
+  if (before && after) {
+    return res.status(400).json({ error: "before and after are mutually exclusive" });
+  }
+
+  if (after) {
+    const afterMsg = DirectMessages.get((m: any) => m.__id === after);
+    if (!afterMsg) return res.status(400).json({ error: "invalid cursor" });
+    if ((afterMsg as any).conversationId !== conversationId) return res.status(400).json({ error: "invalid cursor" });
+    const afterCap = 500;
+    const newer = DirectMessages.getAll()
+      .filter((m: any) => m.conversationId === conversationId && m.timestamp > (afterMsg as any).timestamp)
+      .sort((a: any, b: any) => a.timestamp.localeCompare(b.timestamp));
+    return res.status(200).json({
+      messages: newer.slice(0, afterCap),
+      hasMore: newer.length > afterCap,
+    });
+  }
 
   let all = DirectMessages.getAll()
     .filter((m: any) => m.conversationId === conversationId)

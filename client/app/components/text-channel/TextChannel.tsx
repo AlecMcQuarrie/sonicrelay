@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { X, FileIcon, Trash2, ArrowDown, Reply, CornerUpLeft, MessageSquare } from "lucide-react";
 import MessageHeader from "~/components/ui/message-header";
@@ -10,8 +10,8 @@ import Avatar from "~/components/ui/avatar";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "~/components/ui/context-menu";
 import { cn } from "~/lib/utils";
 import { preloadAllMedia } from "~/lib/preload-media";
-import type { OgData } from "~/lib/preload-media";
 import { buildUploadUrl } from "~/lib/protocol";
+import { channelKey, type MessageCacheStore } from "~/lib/messageCache";
 
 type Message = {
   __id?: string;
@@ -31,24 +31,27 @@ interface TextChannelProps {
   uploadToken: string | null;
   username: string;
   wsRef: React.RefObject<WebSocket | null>;
+  wsStatus: 'open' | 'reconnecting';
   profilePhotos: Record<string, string | null>;
   nameColors: Record<string, string | null>;
   myRole: 'superadmin' | 'admin' | 'member';
   onStartDm?: (username: string) => void;
+  cache: MessageCacheStore;
+  cacheVersion: number;
+  bumpCache: () => void;
 }
 
-export default function TextChannel({ serverIP, channelId, channelName, accessToken, uploadToken, username, wsRef, profilePhotos, nameColors, myRole, onStartDm }: TextChannelProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+export default function TextChannel({
+  serverIP, channelId, channelName, accessToken, uploadToken, username,
+  wsRef, wsStatus, profilePhotos, nameColors, myRole, onStartDm,
+  cache, cacheVersion, bumpCache,
+}: TextChannelProps) {
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [ogCache, setOgCache] = useState<Map<string, OgData>>(new Map());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [replyCache, setReplyCache] = useState<Map<string, Message | 'deleted'>>(new Map());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [jumpingToMessage, setJumpingToMessage] = useState(false);
 
@@ -58,44 +61,83 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
   const loadingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inFlightKeysRef = useRef<Set<string>>(new Set());
+  const prevChannelIdRef = useRef<string | null>(null);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
+  const key = channelKey(channelId);
 
-  // Fetch initial messages, preload all media (attachments + link previews), then reveal
+  // Derive current cache entry. The cacheVersion dep ensures re-read after
+  // any cache mutation (live WS message, delete, reply resolve, scroll save).
+  const entry = useMemo(() => cache.get(key), [cache, key, cacheVersion]);
+  const messages = (entry?.messages ?? []) as Message[];
+  const hasMore = entry?.hasMore ?? false;
+  const ogCache = entry?.ogCache ?? new Map();
+  const replyCache = (entry?.replyCache ?? new Map()) as Map<string, Message | 'deleted'>;
+  const initialLoading = !entry;
+
+  // Fetch on cache miss only; cache hits render instantly.
   useEffect(() => {
-    let cancelled = false;
-    setMessages([]);
-    setHasMore(false);
-    setInitialLoading(true);
-    setReplyingTo(null);
-    setReplyCache(new Map());
-    fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
-      headers: { "access-token": accessToken },
-    })
-      .then((res) => res.json())
-      .then(async (data) => {
-        if (cancelled) return;
-        const cache = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
-        if (cancelled) return;
-        setOgCache(cache);
-        setMessages(data.messages);
-        setHasMore(data.hasMore);
-        setInitialLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [channelId, accessToken]);
+    if (cache.has(key)) return;
+    if (inFlightKeysRef.current.has(key)) return;
+    inFlightKeysRef.current.add(key);
+    (async () => {
+      try {
+        const res = await fetch(`${protocol}://${serverIP}/channels/${channelId}/messages?limit=50`, {
+          headers: { "access-token": accessToken },
+        });
+        const data = await res.json();
+        const og = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
+        const last = data.messages.length > 0 ? data.messages[data.messages.length - 1] : null;
+        cache.set(key, {
+          messages: data.messages,
+          hasMore: data.hasMore,
+          ogCache: og,
+          replyCache: new Map(),
+          lastSeenMessageId: last?.__id ?? null,
+          scrollTop: 0,
+        }, key);
+        bumpCache();
+      } finally {
+        inFlightKeysRef.current.delete(key);
+      }
+    })();
+  }, [key, cache, bumpCache, protocol, serverIP, channelId, accessToken, uploadToken]);
 
-  // Load older messages — preload all media, then reveal
+  // Reset transient UI when the channel changes (reply draft is per-channel).
+  useEffect(() => {
+    setReplyingTo(null);
+  }, [channelId]);
+
+  // Save scroll position when leaving a channel so we can restore on return.
+  useEffect(() => {
+    prevChannelIdRef.current = channelId;
+    return () => {
+      const prev = prevChannelIdRef.current;
+      const container = scrollContainerRef.current;
+      if (prev && container) cache.updateScrollTop(channelKey(prev), container.scrollTop);
+    };
+  }, [channelId, cache]);
+
+  // Restore scroll on cache hit. For column-reverse, scrollTop = 0 means bottom,
+  // so a fresh entry (never-scrolled) stays at the bottom without extra work.
+  useLayoutEffect(() => {
+    if (!entry) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (container.scrollTop === entry.scrollTop) return;
+    container.scrollTop = entry.scrollTop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, initialLoading]);
+
+  // Load older messages — preload all media, then merge into the cache.
   const loadOlder = useCallback(async () => {
-    // Use ref guard to prevent cascading — state updates are async and the observer can fire again
     if (loadingRef.current || !hasMore || messages.length === 0) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
     loadingRef.current = true;
     setLoadingMore(true);
-
-    // Disconnect observer while we're loading to prevent cascade
     observerRef.current?.disconnect();
 
     const oldest = messages[0];
@@ -104,11 +146,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       { headers: { "access-token": accessToken } }
     );
     const data = await res.json();
-
-    // Preload all media in the older page before inserting
     const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
 
-    // Find the DOM element of the first currently-visible message to anchor to
+    // Anchor the current first visible message so scroll position is preserved
     const firstMsgId = messages[0].__id;
     const anchorEl = firstMsgId
       ? container.querySelector(`[data-msg-id="${firstMsgId}"]`) as HTMLElement | null
@@ -116,24 +156,17 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     const anchorOffsetBefore = anchorEl ? anchorEl.getBoundingClientRect().top : null;
 
     flushSync(() => {
-      setOgCache((prev) => {
-        const merged = new Map(prev);
-        newOgEntries.forEach((v, k) => merged.set(k, v));
-        return merged;
-      });
-      setMessages((prev) => [...data.messages, ...prev]);
-      setHasMore(data.hasMore);
+      cache.prependPage(key, data.messages, data.hasMore, newOgEntries);
+      bumpCache();
       setLoadingMore(false);
     });
 
-    // DOM is updated — scroll so the anchor element stays in the same visual position
     if (anchorEl && anchorOffsetBefore !== null) {
       const anchorOffsetAfter = anchorEl.getBoundingClientRect().top;
       const drift = anchorOffsetAfter - anchorOffsetBefore;
       container.scrollTop += drift;
     }
 
-    // Re-enable observer after a short delay so it doesn't immediately fire
     loadingRef.current = false;
     requestAnimationFrame(() => {
       const sentinel = sentinelRef.current;
@@ -141,7 +174,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         observerRef.current.observe(sentinel);
       }
     });
-  }, [hasMore, messages, channelId, accessToken, serverIP, protocol]);
+  }, [hasMore, messages, channelId, accessToken, serverIP, protocol, uploadToken, cache, key, bumpCache]);
 
   // IntersectionObserver to detect scrolling to the top (oldest messages)
   useEffect(() => {
@@ -157,43 +190,31 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     return () => observer.disconnect();
   }, [loadOlder]);
 
-  // Track scroll position to show/hide "jump to bottom" button
+  // Track scroll position: toggles jump-to-bottom button AND marks messages as
+  // seen whenever the user actually reaches the bottom (clears unread banner).
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const onScroll = () => {
-      // In a column-reverse container, scrollTop is 0 at the bottom and negative as you scroll up
       setShowJumpToBottom(container.scrollTop < -100);
+      if (container.scrollTop >= -5) {
+        const latest = messages[messages.length - 1]?.__id;
+        if (latest && cache.has(key)) {
+          cache.updateLastSeen(key, latest);
+          bumpCache();
+        }
+      }
     };
 
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [messages, cache, key, bumpCache]);
 
   const jumpToBottom = () => {
     const container = scrollContainerRef.current;
     if (container) container.scrollTo({ top: 0, behavior: "smooth" });
   };
-
-  // Listen for incoming websocket messages for this channel
-  useEffect(() => {
-    const ws = wsRef.current;
-    if (!ws) return;
-
-    const handleMessage = (event: MessageEvent) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'text-message' && message.channelId === channelId) {
-        setMessages((prev) => [...prev, message]);
-      }
-      if (message.type === 'delete-message') {
-        setMessages((prev) => prev.filter((m) => m.__id !== message.messageId));
-      }
-    };
-
-    ws.addEventListener("message", handleMessage);
-    return () => ws.removeEventListener("message", handleMessage);
-  }, [channelId, wsRef]);
 
   const uploadFiles = async (files: File[]): Promise<string[]> => {
     if (files.length === 0) return [];
@@ -211,7 +232,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   const sendMessage = useCallback(async () => {
     if (!input.trim() && pendingFiles.length === 0) return;
-    if (!wsRef.current) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     setUploading(true);
     const attachments = await uploadFiles(pendingFiles);
@@ -246,6 +267,7 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
   // Fetch reply targets not already loaded locally or cached
   useEffect(() => {
+    if (!entry) return;
     const missingIds = messages
       .filter((m) => m.replyToId && !messages.some((o) => o.__id === m.replyToId) && !replyCache.has(m.replyToId!))
       .map((m) => m.replyToId!);
@@ -257,21 +279,22 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         headers: { "access-token": accessToken },
       }).then((res) => {
         if (res.status === 404) {
-          setReplyCache((prev) => new Map(prev).set(id, 'deleted'));
+          cache.updateReplyCache(key, id, 'deleted');
+          bumpCache();
         } else if (res.ok) {
           return res.json().then((data: Message) => {
-            setReplyCache((prev) => new Map(prev).set(id, data));
+            cache.updateReplyCache(key, id, data);
+            bumpCache();
           });
         }
       }).catch(() => {});
     }
-  }, [messages, replyCache, protocol, serverIP, accessToken]);
+  }, [messages, replyCache, protocol, serverIP, accessToken, entry, cache, key, bumpCache]);
 
   const startReply = (msg: Message) => {
     setReplyingTo(msg);
     textareaRef.current?.focus();
   };
-
 
   const highlightMessage = useCallback((id: string) => {
     setHighlightedMessageId(id);
@@ -282,7 +305,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    // Check if already in DOM
     const existing = container.querySelector(`[data-msg-id="${targetId}"]`) as HTMLElement | null;
     if (existing) {
       existing.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -290,12 +312,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       return;
     }
 
-    // Need to paginate backwards — scroll progressively with each page
     setJumpingToMessage(true);
     loadingRef.current = true;
     observerRef.current?.disconnect();
-
-    // Immediately scroll to the top so the user sees motion right away
     container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
 
     let currentMessages = [...messages];
@@ -311,17 +330,11 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         { headers: { "access-token": accessToken } }
       );
       const data = await res.json();
-
       const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
 
       flushSync(() => {
-        setOgCache((prev) => {
-          const merged = new Map(prev);
-          newOgEntries.forEach((v, k) => merged.set(k, v));
-          return merged;
-        });
-        setMessages((prev) => [...data.messages, ...prev]);
-        setHasMore(data.hasMore);
+        cache.prependPage(key, data.messages, data.hasMore, newOgEntries);
+        bumpCache();
       });
 
       currentMessages = [...data.messages, ...currentMessages];
@@ -331,13 +344,9 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         found = true;
       }
 
-      // Scroll up progressively after each page loads
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => {
-          if (!found) {
-            // Intermediate page — scroll to the top of loaded messages
-            container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
-          }
+          if (!found) container.scrollTo({ top: container.scrollHeight * -1, behavior: 'smooth' });
           resolve();
         });
       });
@@ -345,8 +354,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
 
     setJumpingToMessage(false);
 
-    // Final scroll — use double-rAF to ensure DOM is fully laid out, then manually
-    // compute scroll position to avoid scrollIntoView quirks with column-reverse
     if (found) {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -363,7 +370,6 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       highlightMessage(targetId);
     }
 
-    // Re-enable observer
     loadingRef.current = false;
     requestAnimationFrame(() => {
       const sentinel = sentinelRef.current;
@@ -371,7 +377,26 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         observerRef.current.observe(sentinel);
       }
     });
-  }, [messages, hasMore, channelId, accessToken, serverIP, protocol, highlightMessage]);
+  }, [messages, hasMore, channelId, accessToken, serverIP, protocol, uploadToken, highlightMessage, cache, key, bumpCache]);
+
+  // Count of unseen messages since the last "scrolled to bottom" anchor.
+  // Drives the new-message banner above the composer on cache-hit revisits
+  // (where scroll is restored mid-history) and on live messages while the
+  // user is scrolled up reading older history.
+  const newMessageCount = useMemo(() => {
+    const lastSeen = entry?.lastSeenMessageId;
+    if (!lastSeen) return 0;
+    let count = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const id = messages[i].__id;
+      if (!id || id === lastSeen) break;
+      count++;
+    }
+    return count;
+  }, [messages, entry?.lastSeenMessageId]);
+
+  const reconnecting = wsStatus === 'reconnecting';
+  const canSend = (!!input.trim() || pendingFiles.length > 0) && !uploading && !reconnecting;
 
   return (
     <div className="flex flex-col h-full min-w-0">
@@ -535,6 +560,17 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
       </div>
       )}
 
+      {/* New messages banner */}
+      {newMessageCount > 0 && (
+        <button
+          onClick={jumpToBottom}
+          className="mx-4 mt-1 flex items-center justify-center gap-1.5 px-3 py-1 rounded-md bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors cursor-pointer"
+        >
+          <ArrowDown className="w-3 h-3" />
+          {newMessageCount} new message{newMessageCount === 1 ? '' : 's'}
+        </button>
+      )}
+
       {/* Pending file previews */}
       {pendingFiles.length > 0 && (
         <div className="px-4 flex gap-2 flex-wrap">
@@ -583,6 +619,14 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         </div>
       )}
 
+      {/* Reconnecting indicator */}
+      {reconnecting && (
+        <div className="px-4 py-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <div className="w-2 h-2 border border-current border-t-transparent rounded-full animate-spin" />
+          Reconnecting…
+        </div>
+      )}
+
       {/* Input */}
       <input
         ref={fileInputRef}
@@ -595,8 +639,8 @@ export default function TextChannel({ serverIP, channelId, channelName, accessTo
         value={input}
         onChange={setInput}
         onSend={sendMessage}
-        placeholder={`Message #${channelName}`}
-        canSend={(!!input.trim() || pendingFiles.length > 0) && !uploading}
+        placeholder={reconnecting ? 'Reconnecting…' : `Message #${channelName}`}
+        canSend={canSend}
         onPaste={(files) => setPendingFiles((prev) => [...prev, ...files])}
         onAttachClick={() => fileInputRef.current?.click()}
         inputRef={textareaRef}
