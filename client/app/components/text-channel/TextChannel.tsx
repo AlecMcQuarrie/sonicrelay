@@ -62,7 +62,9 @@ export default function TextChannel({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const inFlightKeysRef = useRef<Set<string>>(new Set());
-  const prevChannelIdRef = useRef<string | null>(null);
+  const atBottomRef = useRef(true);
+  const prevLatestIdRef = useRef<string | null>(null);
+  const prevChannelIdForScrollRef = useRef<string | null>(null);
 
   const protocol = serverIP.includes('localhost') || serverIP.includes('127.0.0.1') ? 'http' : 'https';
   const key = channelKey(channelId);
@@ -109,16 +111,6 @@ export default function TextChannel({
     setReplyingTo(null);
   }, [channelId]);
 
-  // Save scroll position when leaving a channel so we can restore on return.
-  useEffect(() => {
-    prevChannelIdRef.current = channelId;
-    return () => {
-      const prev = prevChannelIdRef.current;
-      const container = scrollContainerRef.current;
-      if (prev && container) cache.updateScrollTop(channelKey(prev), container.scrollTop);
-    };
-  }, [channelId, cache]);
-
   // Restore scroll on cache hit. For column-reverse, scrollTop = 0 means bottom,
   // so a fresh entry (never-scrolled) stays at the bottom without extra work.
   useLayoutEffect(() => {
@@ -127,8 +119,29 @@ export default function TextChannel({
     if (!container) return;
     if (container.scrollTop === entry.scrollTop) return;
     container.scrollTop = entry.scrollTop;
+    atBottomRef.current = entry.scrollTop >= -5;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, initialLoading]);
+
+  // Auto-scroll to bottom when a new message arrives while the user is pinned
+  // to the bottom. Also mark it seen so the "new messages" banner stays hidden.
+  const latestId = messages.length > 0 ? messages[messages.length - 1].__id ?? null : null;
+  useLayoutEffect(() => {
+    if (prevChannelIdForScrollRef.current !== channelId) {
+      prevChannelIdForScrollRef.current = channelId;
+      prevLatestIdRef.current = latestId;
+      return;
+    }
+    if (!latestId || latestId === prevLatestIdRef.current) return;
+    prevLatestIdRef.current = latestId;
+    if (!atBottomRef.current) return;
+    const container = scrollContainerRef.current;
+    if (container) container.scrollTop = 0;
+    if (cache.has(key)) {
+      cache.updateLastSeen(key, latestId);
+      bumpCache();
+    }
+  }, [channelId, latestId, cache, key, bumpCache]);
 
   // Load older messages — preload all media, then merge into the cache.
   const loadOlder = useCallback(async () => {
@@ -197,8 +210,10 @@ export default function TextChannel({
     if (!container) return;
 
     const onScroll = () => {
+      atBottomRef.current = container.scrollTop >= -5;
       setShowJumpToBottom(container.scrollTop < -100);
-      if (container.scrollTop >= -5) {
+      if (cache.has(key)) cache.updateScrollTop(key, container.scrollTop);
+      if (atBottomRef.current) {
         const latest = messages[messages.length - 1]?.__id;
         if (latest && cache.has(key)) {
           cache.updateLastSeen(key, latest);

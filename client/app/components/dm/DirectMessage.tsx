@@ -70,7 +70,9 @@ export default function DirectMessage({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const inFlightKeysRef = useRef<Set<string>>(new Set());
-  const prevPartnerRef = useRef<string | null>(null);
+  const atBottomRef = useRef(true);
+  const prevLatestIdRef = useRef<string | null>(null);
+  const prevPartnerForScrollRef = useRef<string | null>(null);
 
   const protocol = getProtocol(serverIP);
   const key = dmKey(partner);
@@ -141,24 +143,35 @@ export default function DirectMessage({
     setReplyingTo(null);
   }, [partner]);
 
-  // Save scroll position on partner change so we restore it on return.
-  useEffect(() => {
-    prevPartnerRef.current = partner;
-    return () => {
-      const prev = prevPartnerRef.current;
-      const container = scrollContainerRef.current;
-      if (prev && container) cache.updateScrollTop(dmKey(prev), container.scrollTop);
-    };
-  }, [partner, cache]);
-
   useLayoutEffect(() => {
     if (!entry) return;
     const container = scrollContainerRef.current;
     if (!container) return;
     if (container.scrollTop === entry.scrollTop) return;
     container.scrollTop = entry.scrollTop;
+    atBottomRef.current = entry.scrollTop >= -5;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partner, initialLoading]);
+
+  // Auto-scroll to bottom when a new message arrives while the user is pinned
+  // to the bottom. Also mark it seen so the "new messages" banner stays hidden.
+  const latestId = messages.length > 0 ? messages[messages.length - 1].__id ?? null : null;
+  useLayoutEffect(() => {
+    if (prevPartnerForScrollRef.current !== partner) {
+      prevPartnerForScrollRef.current = partner;
+      prevLatestIdRef.current = latestId;
+      return;
+    }
+    if (!latestId || latestId === prevLatestIdRef.current) return;
+    prevLatestIdRef.current = latestId;
+    if (!atBottomRef.current) return;
+    const container = scrollContainerRef.current;
+    if (container) container.scrollTop = 0;
+    if (cache.has(key)) {
+      cache.updateLastSeen(key, latestId);
+      bumpCache();
+    }
+  }, [partner, latestId, cache, key, bumpCache]);
 
   // Infinite scroll for older messages
   useEffect(() => {
@@ -213,8 +226,10 @@ export default function DirectMessage({
     const container = scrollContainerRef.current;
     if (!container) return;
     const onScroll = () => {
+      atBottomRef.current = container.scrollTop >= -5;
       setShowJumpToBottom(container.scrollTop < -100);
-      if (container.scrollTop >= -5) {
+      if (cache.has(key)) cache.updateScrollTop(key, container.scrollTop);
+      if (atBottomRef.current) {
         const latest = messages[messages.length - 1]?.__id;
         if (latest && cache.has(key)) {
           cache.updateLastSeen(key, latest);
