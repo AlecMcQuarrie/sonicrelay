@@ -113,13 +113,21 @@ export default function TextChannel({
 
   // Restore scroll on cache hit. For column-reverse, scrollTop = 0 means bottom,
   // so a fresh entry (never-scrolled) stays at the bottom without extra work.
+  // If we land at the bottom, advance lastSeen — otherwise a message that
+  // arrived while the channel was backgrounded would leave a stale banner.
   useLayoutEffect(() => {
     if (!entry) return;
     const container = scrollContainerRef.current;
     if (!container) return;
-    if (container.scrollTop === entry.scrollTop) return;
-    container.scrollTop = entry.scrollTop;
+    if (container.scrollTop !== entry.scrollTop) container.scrollTop = entry.scrollTop;
     atBottomRef.current = entry.scrollTop >= -5;
+    if (atBottomRef.current) {
+      const latest = messages[messages.length - 1]?.__id;
+      if (latest && latest !== entry.lastSeenMessageId && cache.has(key)) {
+        cache.updateLastSeen(key, latest);
+        bumpCache();
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, initialLoading]);
 
@@ -150,8 +158,17 @@ export default function TextChannel({
     if (!container) return;
 
     loadingRef.current = true;
-    setLoadingMore(true);
     observerRef.current?.disconnect();
+
+    // Anchor the current first visible message so scroll position is preserved.
+    // Capture BEFORE any render/await so layout is stable and the reference is fresh.
+    const firstMsgId = messages[0].__id;
+    const anchorEl = firstMsgId
+      ? container.querySelector(`[data-msg-id="${firstMsgId}"]`) as HTMLElement | null
+      : null;
+    const anchorOffsetBefore = anchorEl ? anchorEl.getBoundingClientRect().top : null;
+
+    setLoadingMore(true);
 
     const oldest = messages[0];
     const res = await fetch(
@@ -160,13 +177,6 @@ export default function TextChannel({
     );
     const data = await res.json();
     const newOgEntries = await preloadAllMedia(data.messages, protocol, serverIP, accessToken, uploadToken);
-
-    // Anchor the current first visible message so scroll position is preserved
-    const firstMsgId = messages[0].__id;
-    const anchorEl = firstMsgId
-      ? container.querySelector(`[data-msg-id="${firstMsgId}"]`) as HTMLElement | null
-      : null;
-    const anchorOffsetBefore = anchorEl ? anchorEl.getBoundingClientRect().top : null;
 
     flushSync(() => {
       cache.prependPage(key, data.messages, data.hasMore, newOgEntries);

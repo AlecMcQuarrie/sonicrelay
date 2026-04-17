@@ -143,13 +143,22 @@ export default function DirectMessage({
     setReplyingTo(null);
   }, [partner]);
 
+  // Restore scroll on cache hit. If we land at the bottom, advance lastSeen —
+  // otherwise a message that arrived while this DM was backgrounded would
+  // leave a stale banner.
   useLayoutEffect(() => {
     if (!entry) return;
     const container = scrollContainerRef.current;
     if (!container) return;
-    if (container.scrollTop === entry.scrollTop) return;
-    container.scrollTop = entry.scrollTop;
+    if (container.scrollTop !== entry.scrollTop) container.scrollTop = entry.scrollTop;
     atBottomRef.current = entry.scrollTop >= -5;
+    if (atBottomRef.current) {
+      const latest = messages[messages.length - 1]?.__id;
+      if (latest && latest !== entry.lastSeenMessageId && cache.has(key)) {
+        cache.updateLastSeen(key, latest);
+        bumpCache();
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partner, initialLoading]);
 
