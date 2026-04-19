@@ -123,8 +123,7 @@ export class VoiceClient {
   private trackPumpers = new Map<string, HTMLAudioElement>(); // muted <audio> per user that keeps WebRTC tracks flowing into Web Audio
   private compressorNode: DynamicsCompressorNode | null = null;
   private makeupGainNode: GainNode | null = null;
-  private recvDestination: MediaStreamAudioDestinationNode | null = null;
-  private voiceAudio: HTMLAudioElement | null = null;
+  private masterGainNode: GainNode | null = null;
   private normalizeVoices = false;
   private keyDownHandler: (e: KeyboardEvent) => void;
   private keyUpHandler: (e: KeyboardEvent) => void;
@@ -205,13 +204,14 @@ export class VoiceClient {
         await this.audioContext.resume();
       }
 
-      // Shared receive graph: every remote mic feeds one GainNode per user, which
-      // routes into either the compressor chain or straight to the destination
-      // depending on the "Normalize voices" toggle. One <audio> element plays the
-      // mixed result — per-user mute moves onto the GainNode and deafen is a
-      // single element.muted. The compressor tames peaks; the makeup gain that
-      // follows it lifts quiet speakers so the feature actually boosts, not just
-      // limits.
+      // Shared receive graph: every remote mic feeds one GainNode per user,
+      // which routes into either the compressor chain or straight to the
+      // master gain depending on the "Normalize voices" toggle. Final output
+      // goes through audioContext.destination — avoiding an <audio> element
+      // here is deliberate: Chrome's tab-audio capture (getDisplayMedia with
+      // audio: true) includes DOM-attached media elements before setSinkId
+      // routing, so an <audio> sink would leak the received voice back into
+      // our own screen-share audio.
       this.compressorNode = this.audioContext.createDynamicsCompressor();
       this.compressorNode.threshold.value = -18;
       this.compressorNode.knee.value = 20;
@@ -220,19 +220,19 @@ export class VoiceClient {
       this.compressorNode.release.value = 0.25;
       this.makeupGainNode = this.audioContext.createGain();
       this.makeupGainNode.gain.value = 2;
-      this.recvDestination = this.audioContext.createMediaStreamDestination();
+      this.masterGainNode = this.audioContext.createGain();
+      this.masterGainNode.gain.value = 1; // deafen sets to 0
       this.compressorNode.connect(this.makeupGainNode);
-      this.makeupGainNode.connect(this.recvDestination);
-      this.voiceAudio = this.createAudioElement();
-      this.voiceAudio.srcObject = this.recvDestination.stream;
-      // Chromium silently drops audio from a MediaStreamAudioDestinationNode
-      // when the <audio> element isn't attached to the DOM. A detached element
-      // works fine for mediasoup tracks set directly as srcObject (the old
-      // code path) but not for tracks that come from a Web Audio graph, which
-      // is why nothing was audible.
-      this.voiceAudio.style.display = 'none';
-      document.body.appendChild(this.voiceAudio);
-      this.voiceAudio.play().catch(() => {});
+      this.makeupGainNode.connect(this.masterGainNode);
+      this.masterGainNode.connect(this.audioContext.destination);
+
+      // Route the AudioContext itself to the user's chosen output device.
+      // Chrome 110+ / Electron 35 supports AudioContext.setSinkId; older
+      // runtimes fall back to the default device.
+      const outputDevice = localStorage.getItem("preferredOutputDevice");
+      if (outputDevice && 'setSinkId' in this.audioContext) {
+        (this.audioContext as any).setSinkId(outputDevice).catch(() => {});
+      }
 
       // Get router capabilities and join the room
       const joinResult = await request(this.ws, 'join', { channelId });
@@ -362,7 +362,7 @@ export class VoiceClient {
 
     // Route received mic audio through the shared receive graph. One source feeds
     // both the per-user GainNode and the level-monitoring analyser.
-    if (remoteUsername && this.audioContext && this.recvDestination) {
+    if (remoteUsername && this.audioContext && this.masterGainNode) {
       // Chromium won't deliver audio from a WebRTC-sourced track into
       // createMediaStreamSource unless an <audio> element is actively playing
       // that track — otherwise the graph outputs silence. Create a muted,
@@ -398,11 +398,11 @@ export class VoiceClient {
     // Only touch the main output edges; leave the analyser tap alone. The
     // targeted disconnect throws if not currently connected — swallow that.
     if (this.compressorNode) { try { gainNode.disconnect(this.compressorNode); } catch {} }
-    if (this.recvDestination) { try { gainNode.disconnect(this.recvDestination); } catch {} }
+    if (this.masterGainNode) { try { gainNode.disconnect(this.masterGainNode); } catch {} }
     if (this.normalizeVoices && this.compressorNode) {
       gainNode.connect(this.compressorNode);
-    } else if (this.recvDestination) {
-      gainNode.connect(this.recvDestination);
+    } else if (this.masterGainNode) {
+      gainNode.connect(this.masterGainNode);
     }
   }
 
@@ -749,18 +749,12 @@ export class VoiceClient {
     this.trackPumpers.clear();
     this.userBaseVolumes.clear();
     this.userMutedState.clear();
-    if (this.voiceAudio) {
-      this.voiceAudio.srcObject = null;
-      this.voiceAudio.pause();
-      this.voiceAudio.remove();
-      this.voiceAudio = null;
-    }
     this.compressorNode?.disconnect();
     this.compressorNode = null;
     this.makeupGainNode?.disconnect();
     this.makeupGainNode = null;
-    this.recvDestination?.disconnect();
-    this.recvDestination = null;
+    this.masterGainNode?.disconnect();
+    this.masterGainNode = null;
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.rawMicStream = null;
     this.micGainNode = null;
@@ -876,8 +870,8 @@ export class VoiceClient {
   }
 
   async switchOutputDevice(deviceId: string) {
-    if (this.voiceAudio && 'setSinkId' in this.voiceAudio) {
-      await (this.voiceAudio as any).setSinkId(deviceId);
+    if (this.audioContext && 'setSinkId' in this.audioContext) {
+      await (this.audioContext as any).setSinkId(deviceId);
     }
     for (const audio of this.screenAudioElements.values()) {
       if ('setSinkId' in audio) {
@@ -901,7 +895,7 @@ export class VoiceClient {
   }
 
   setDeafened(deafened: boolean) {
-    if (this.voiceAudio) this.voiceAudio.muted = deafened;
+    if (this.masterGainNode) this.masterGainNode.gain.value = deafened ? 0 : 1;
     for (const audio of this.screenAudioElements.values()) {
       audio.muted = deafened;
     }
