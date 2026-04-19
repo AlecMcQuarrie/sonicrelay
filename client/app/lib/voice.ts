@@ -120,6 +120,7 @@ export class VoiceClient {
   private userBaseVolumes = new Map<string, number>(); // username -> 0..2 (pre-speakerGain)
   private userMutedState = new Map<string, boolean>(); // username -> muted
   private userGainNodes = new Map<string, GainNode>(); // username -> receive gain
+  private trackPumpers = new Map<string, HTMLAudioElement>(); // muted <audio> per user that keeps WebRTC tracks flowing into Web Audio
   private compressorNode: DynamicsCompressorNode | null = null;
   private makeupGainNode: GainNode | null = null;
   private recvDestination: MediaStreamAudioDestinationNode | null = null;
@@ -362,6 +363,19 @@ export class VoiceClient {
     // Route received mic audio through the shared receive graph. One source feeds
     // both the per-user GainNode and the level-monitoring analyser.
     if (remoteUsername && this.audioContext && this.recvDestination) {
+      // Chromium won't deliver audio from a WebRTC-sourced track into
+      // createMediaStreamSource unless an <audio> element is actively playing
+      // that track — otherwise the graph outputs silence. Create a muted,
+      // DOM-attached pump element per peer. Audible output still comes from
+      // the Web Audio graph feeding voiceAudio.
+      const pumper = new Audio();
+      pumper.srcObject = new MediaStream([consumer.track]);
+      pumper.muted = true;
+      pumper.style.display = 'none';
+      document.body.appendChild(pumper);
+      pumper.play().catch(() => {});
+      this.trackPumpers.set(remoteUsername, pumper);
+
       const trackSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
       const gainNode = this.audioContext.createGain();
       trackSource.connect(gainNode);
@@ -428,6 +442,12 @@ export class VoiceClient {
         if (gainNode) {
           gainNode.disconnect();
           this.userGainNodes.delete(username);
+        }
+        const pumper = this.trackPumpers.get(username);
+        if (pumper) {
+          pumper.srcObject = null;
+          pumper.remove();
+          this.trackPumpers.delete(username);
         }
         this.userBaseVolumes.delete(username);
         this.userMutedState.delete(username);
@@ -725,6 +745,8 @@ export class VoiceClient {
     this.consumers.clear();
     this.userGainNodes.forEach((g) => g.disconnect());
     this.userGainNodes.clear();
+    this.trackPumpers.forEach((p) => { p.srcObject = null; p.remove(); });
+    this.trackPumpers.clear();
     this.userBaseVolumes.clear();
     this.userMutedState.clear();
     if (this.voiceAudio) {
