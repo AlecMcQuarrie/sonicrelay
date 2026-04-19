@@ -164,6 +164,7 @@ const SETTING_VALIDATORS: Record<string, (v: unknown) => unknown | undefined> = 
   vadThreshold: (v) => typeof v === 'number' && v >= 0 && v <= 100 ? v : undefined,
   pttEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   pttKey: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
+  normalizeVoices: (v) => typeof v === 'boolean' ? v : undefined,
   theme: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
   customThemeColors: (v) => {
     if (!v || typeof v !== 'object') return undefined;

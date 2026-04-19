@@ -28,7 +28,7 @@ interface ChannelSidebarProps {
   selectedTextChannelId: string | null;
   voiceChannelId: string | null;
   voicePeers: Record<string, string[]>;
-  speakingUsers: Set<string>;
+  speakingLevels: Map<string, number>;
   peerPings: Record<string, number>;
   videoTracks: Map<string, MediaStreamTrack>;
   screenTracks: Map<string, MediaStreamTrack>;
@@ -64,10 +64,10 @@ function pingColor(ms: number): string {
 }
 
 
-function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, voicePeerSettings, screenAudioPeerSettings, peerPings, hasScreenAudio, isScreenSharing, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
+function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, voicePeerSettings, screenAudioPeerSettings, peerPings, hasScreenAudio, isScreenSharing, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
   user: string;
   isSelf?: boolean;
-  speakingUsers: Set<string>;
+  speakingLevels: Map<string, number>;
   selfMutedUsers: Set<string>;
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
@@ -93,7 +93,11 @@ function PeerRow({ user, isSelf, speakingUsers, selfMutedUsers, deafenedUsers, v
           className="py-1 text-sm text-muted-foreground flex items-center gap-2 cursor-pointer select-none hover:bg-accent rounded-md px-1"
         >
           <span
-            className={`inline-block w-2 h-2 rounded-full shrink-0 transition-colors ${speakingUsers.has(user) ? "bg-green-500" : "bg-muted-foreground/40"}`}
+            className={`inline-block w-2 h-2 rounded-full shrink-0 ${(speakingLevels.get(user) ?? 0) > 0.05 ? "bg-green-500" : "bg-muted-foreground/40"}`}
+            style={{
+              opacity: 0.4 + 0.6 * (speakingLevels.get(user) ?? 0),
+              transform: `scale(${0.85 + 0.3 * (speakingLevels.get(user) ?? 0)})`,
+            }}
           />
           <span className={`flex-1 truncate ${isScreenSharing ? "text-red-500" : ""}`}>{user}</span>
           {selfMutedUsers.has(user) && (
@@ -169,7 +173,7 @@ export default function ChannelSidebar({
   unreadCounts,
   voiceChannelId,
   voicePeers,
-  speakingUsers,
+  speakingLevels,
   peerPings,
   videoTracks,
   screenTracks,
@@ -256,7 +260,7 @@ export default function ChannelSidebar({
                 <PeerRow
                   user={user}
                   isSelf={user === localUsername}
-                  speakingUsers={speakingUsers}
+                  speakingLevels={speakingLevels}
                   selfMutedUsers={selfMutedUsers}
                   deafenedUsers={deafenedUsers}
                   voicePeerSettings={voicePeerSettings}

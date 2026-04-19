@@ -63,7 +63,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
   const [voicePeers, setVoicePeers] = useState<Record<string, string[]>>({});
   const [isMuted, setIsMuted] = useState(() => localStorage.getItem('voiceMuted') === 'true');
-  const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
+  const [speakingLevels, setSpeakingLevels] = useState<Map<string, number>>(new Map());
   const [peerPings, setPeerPings] = useState<Record<string, number>>({});
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -464,11 +464,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
             [channelId]: (prev[channelId] || []).filter((u) => u !== user),
           }));
         },
-        onSpeakingChange: (user, isSpeaking) => {
-          setSpeakingUsers((prev) => {
-            const next = new Set(prev);
-            if (isSpeaking) next.add(user);
-            else next.delete(user);
+        onLevelChange: (user, level) => {
+          setSpeakingLevels((prev) => {
+            const next = new Map(prev);
+            if (level < 0.02) next.delete(user);
+            else next.set(user, level);
             return next;
           });
         },
@@ -549,7 +549,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         // Server drops the user from voice on disconnect; reflect in the UI.
         setVoiceChannelId(null);
         setVoicePeers({});
-        setSpeakingUsers(new Set());
+        setSpeakingLevels(new Map());
         setVideoTracks(new Map());
         setScreenTracks(new Map());
         setScreenAudioUsers(new Set());
@@ -936,7 +936,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         unreadCounts={unreadCounts}
         voiceChannelId={voiceChannelId}
         voicePeers={voicePeers}
-        speakingUsers={speakingUsers}
+        speakingLevels={speakingLevels}
         peerPings={peerPings}
         videoTracks={videoTracks}
         screenTracks={screenTracks}

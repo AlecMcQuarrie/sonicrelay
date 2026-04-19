@@ -17,6 +17,7 @@ export type UserSettings = {
   vadThreshold: number;
   pttEnabled: boolean;
   pttKey: string;
+  normalizeVoices: boolean;
   theme: string;
   customThemeColors: CustomColors;
 };
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   vadThreshold: 30,
   pttEnabled: false,
   pttKey: '',
+  normalizeVoices: false,
   theme: 'system',
   customThemeColors: DEFAULT_CUSTOM_COLORS,
 };
@@ -47,6 +49,7 @@ export function loadCachedSettings(): UserSettings {
     vadThreshold: parseFloat(localStorage.getItem('vadThreshold') ?? String(DEFAULT_SETTINGS.vadThreshold)),
     pttEnabled: localStorage.getItem('pttEnabled') === 'true',
     pttKey: localStorage.getItem('pttKey') ?? DEFAULT_SETTINGS.pttKey,
+    normalizeVoices: localStorage.getItem('normalizeVoices') === 'true',
     theme: localStorage.getItem('theme') ?? DEFAULT_SETTINGS.theme,
     customThemeColors: loadCustomColors(),
   };
@@ -77,4 +80,5 @@ export function applyVoiceSettings(voice: VoiceClient | null, s: UserSettings) {
   voice.setVadThreshold(s.vadThreshold);
   voice.setPttEnabled(s.pttEnabled);
   voice.setPttKey(s.pttKey);
+  voice.setNormalizeVoices(s.normalizeVoices);
 }

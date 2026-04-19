@@ -15,7 +15,7 @@ interface PeerVolumeMenuProps {
 }
 
 export default function PeerVolumeMenu({ username, setting, disabled, onVolume, onMute }: PeerVolumeMenuProps) {
-  const [volume, setVolume] = useState(Math.min(1, setting.volume));
+  const [volume, setVolume] = useState(Math.max(0, Math.min(2, setting.volume)));
   const [muted, setMuted] = useState(setting.muted);
 
   return (
@@ -38,7 +38,7 @@ export default function PeerVolumeMenu({ username, setting, disabled, onVolume, 
         <input
           type="range"
           min="0"
-          max="1"
+          max="2"
           step="0.05"
           value={volume}
           disabled={disabled}

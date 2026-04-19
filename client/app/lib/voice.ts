@@ -66,7 +66,7 @@ function request(ws: WebSocket, action: string, data: Record<string, any> = {}):
 type VoiceHandlers = {
   onPeerJoined: (channelId: string, username: string) => void;
   onPeerLeft: (channelId: string, username: string) => void;
-  onSpeakingChange: (username: string, isSpeaking: boolean) => void;
+  onLevelChange: (username: string, level: number) => void;
   onVideoTrack: (username: string, track: MediaStreamTrack | null) => void;
   onScreenTrack: (username: string, track: MediaStreamTrack | null) => void;
   onScreenAudioChange: (username: string, available: boolean) => void;
@@ -84,8 +84,6 @@ export class VoiceClient {
   private screenAudioProducer: types.Producer | null = null;
   private screenStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
-  private audioElements = new Map<string, HTMLAudioElement>();
-  private userAudioElements = new Map<string, HTMLAudioElement>(); // username -> mic audio element
   private videoProducerIds = new Set<string>(); // producer IDs that are camera video
   private screenProducerIds = new Set<string>(); // producer IDs that are screen share video
   private screenAudioProducerIds = new Set<string>(); // producer IDs that are screen share audio
@@ -100,7 +98,7 @@ export class VoiceClient {
   // Audio level monitoring
   private audioContext: AudioContext | null = null;
   private analysers = new Map<string, AnalyserNode>(); // username -> analyser
-  private speakingState = new Map<string, boolean>(); // username -> isSpeaking
+  private userLevels = new Map<string, number>(); // username -> smoothed level 0..1
   private producerUsernames = new Map<string, string>(); // producerId -> username
   private levelCheckInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -119,7 +117,14 @@ export class VoiceClient {
   private pttKey = '';
   private pttHeld = false;
   private lastLocalRms = 0; // 0..100, scaled from byte-domain RMS
-  private userBaseVolumes = new Map<string, number>(); // username -> 0..1 (pre-speakerGain)
+  private userBaseVolumes = new Map<string, number>(); // username -> 0..2 (pre-speakerGain)
+  private userMutedState = new Map<string, boolean>(); // username -> muted
+  private userGainNodes = new Map<string, GainNode>(); // username -> receive gain
+  private compressorNode: DynamicsCompressorNode | null = null;
+  private makeupGainNode: GainNode | null = null;
+  private recvDestination: MediaStreamAudioDestinationNode | null = null;
+  private voiceAudio: HTMLAudioElement | null = null;
+  private normalizeVoices = false;
   private keyDownHandler: (e: KeyboardEvent) => void;
   private keyUpHandler: (e: KeyboardEvent) => void;
   private joinInProgress = false;
@@ -136,6 +141,7 @@ export class VoiceClient {
     this.vadThreshold = parseFloat(localStorage.getItem('vadThreshold') ?? '30');
     this.pttEnabled = localStorage.getItem('pttEnabled') === 'true';
     this.pttKey = localStorage.getItem('pttKey') ?? '';
+    this.normalizeVoices = localStorage.getItem('normalizeVoices') === 'true';
 
     // PTT listeners — always installed, gated on pttEnabled so toggling
     // from the settings tab takes effect without rewiring event handlers.
@@ -197,6 +203,28 @@ export class VoiceClient {
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
+
+      // Shared receive graph: every remote mic feeds one GainNode per user, which
+      // routes into either the compressor chain or straight to the destination
+      // depending on the "Normalize voices" toggle. One <audio> element plays the
+      // mixed result — per-user mute moves onto the GainNode and deafen is a
+      // single element.muted. The compressor tames peaks; the makeup gain that
+      // follows it lifts quiet speakers so the feature actually boosts, not just
+      // limits.
+      this.compressorNode = this.audioContext.createDynamicsCompressor();
+      this.compressorNode.threshold.value = -18;
+      this.compressorNode.knee.value = 20;
+      this.compressorNode.ratio.value = 4;
+      this.compressorNode.attack.value = 0.003;
+      this.compressorNode.release.value = 0.25;
+      this.makeupGainNode = this.audioContext.createGain();
+      this.makeupGainNode.gain.value = 2;
+      this.recvDestination = this.audioContext.createMediaStreamDestination();
+      this.compressorNode.connect(this.makeupGainNode);
+      this.makeupGainNode.connect(this.recvDestination);
+      this.voiceAudio = this.createAudioElement();
+      this.voiceAudio.srcObject = this.recvDestination.stream;
+      this.voiceAudio.play().catch(() => {});
 
       // Get router capabilities and join the room
       const joinResult = await request(this.ws, 'join', { channelId });
@@ -324,21 +352,45 @@ export class VoiceClient {
       return;
     }
 
-    // Play the received mic audio
-    const audio = this.createAudioElement();
-    audio.srcObject = new MediaStream([consumer.track]);
-    audio.play();
-    this.audioElements.set(producerId, audio);
-    if (remoteUsername) this.userAudioElements.set(remoteUsername, audio);
+    // Route received mic audio through the shared receive graph. One source feeds
+    // both the per-user GainNode and the level-monitoring analyser.
+    if (remoteUsername && this.audioContext && this.recvDestination) {
+      const trackSource = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
+      const gainNode = this.audioContext.createGain();
+      trackSource.connect(gainNode);
+      this.userGainNodes.set(remoteUsername, gainNode);
+      this.applyUserGain(remoteUsername);
+      this.routeUserGain(gainNode);
 
-    // Monitor remote audio levels
-    if (remoteUsername && this.audioContext) {
-      const source = this.audioContext.createMediaStreamSource(new MediaStream([consumer.track]));
+      // Tap the analyser off the per-user GainNode (post-volume) so the
+      // speaking indicator intensity tracks what this listener actually hears
+      // — boosting a quiet peer also boosts their indicator. Kept as a
+      // permanent connection; routeUserGain only re-wires the main output.
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 256;
-      source.connect(analyser);
+      gainNode.connect(analyser);
       this.analysers.set(remoteUsername, analyser);
     }
+  }
+
+  private routeUserGain(gainNode: GainNode) {
+    // Only touch the main output edges; leave the analyser tap alone. The
+    // targeted disconnect throws if not currently connected — swallow that.
+    if (this.compressorNode) { try { gainNode.disconnect(this.compressorNode); } catch {} }
+    if (this.recvDestination) { try { gainNode.disconnect(this.recvDestination); } catch {} }
+    if (this.normalizeVoices && this.compressorNode) {
+      gainNode.connect(this.compressorNode);
+    } else if (this.recvDestination) {
+      gainNode.connect(this.recvDestination);
+    }
+  }
+
+  private applyUserGain(username: string) {
+    const node = this.userGainNodes.get(username);
+    if (!node) return;
+    const muted = this.userMutedState.get(username) ?? false;
+    const base = this.userBaseVolumes.get(username) ?? 1;
+    node.gain.value = muted ? 0 : base * this.speakerGain;
   }
 
   private removeProducer(producerId: string) {
@@ -364,16 +416,17 @@ export class VoiceClient {
       this.videoProducerIds.delete(producerId);
       if (username) this.handlers.onVideoTrack(username, null);
     } else {
-      const audio = this.audioElements.get(producerId);
-      if (audio) {
-        audio.srcObject = null;
-        this.audioElements.delete(producerId);
-      }
       if (username) {
-        this.userAudioElements.delete(username);
+        const gainNode = this.userGainNodes.get(username);
+        if (gainNode) {
+          gainNode.disconnect();
+          this.userGainNodes.delete(username);
+        }
+        this.userBaseVolumes.delete(username);
+        this.userMutedState.delete(username);
         this.analysers.delete(username);
-        this.speakingState.delete(username);
-        this.handlers.onSpeakingChange(username, false);
+        this.userLevels.delete(username);
+        this.handlers.onLevelChange(username, 0);
       }
     }
 
@@ -423,14 +476,18 @@ export class VoiceClient {
   }
 
   private startLevelMonitoring() {
-    const SPEAKING_THRESHOLD = 3; // RMS deviation from silence (0-128 scale)
+    // RMS level → 0..1 display level. Floor subtracts room-noise baseline so
+    // silence sits at true 0; sqrt curve expands the low/mid range so quiet
+    // speech still produces a visible indicator rather than a barely-lit pip.
+    const RMS_FLOOR = 1.0;
+    const RMS_TARGET = 30;
     const bufferLength = 256; // matches fftSize on our analysers
     const dataArray = new Uint8Array(bufferLength);
 
     this.levelCheckInterval = setInterval(() => {
       for (const [username, analyser] of this.analysers) {
         analyser.getByteTimeDomainData(dataArray);
-        // Calculate RMS deviation from silence (128 = silence center)
+        // RMS deviation from silence (128 = silence center in byte domain)
         let sumSquares = 0;
         for (let i = 0; i < dataArray.length; i++) {
           const deviation = dataArray[i] - 128;
@@ -444,16 +501,22 @@ export class VoiceClient {
           this.updateVadGate();
         }
 
-        // Gate the speaking indicator for the local user on whether we're
-        // actually transmitting — otherwise PTT/VAD users see themselves lit
-        // up while peers hear nothing.
+        // Gate the indicator for the local user on whether we're actually
+        // transmitting — PTT/VAD users shouldn't glow while peers hear silence.
         const isLocal = username === this.localUsername;
         const gateOpen = !isLocal || !this.vadGateNode || this.vadGateNode.gain.value > 0.001;
-        const isSpeaking = gateOpen && rms > SPEAKING_THRESHOLD;
-        const wasSpeaking = this.speakingState.get(username) ?? false;
-        if (isSpeaking !== wasSpeaking) {
-          this.speakingState.set(username, isSpeaking);
-          this.handlers.onSpeakingChange(username, isSpeaking);
+        const raw = Math.max(0, rms - RMS_FLOOR) / RMS_TARGET;
+        const target = gateOpen ? Math.min(1, Math.sqrt(raw)) : 0;
+
+        // Fast attack, slow release — natural VU-meter feel. Without release
+        // smoothing the indicator would flash off between syllables.
+        const prev = this.userLevels.get(username) ?? 0;
+        const alpha = target > prev ? 0.8 : 0.25;
+        const smoothed = prev * (1 - alpha) + target * alpha;
+        this.userLevels.set(username, smoothed);
+
+        if (Math.abs(smoothed - prev) > 0.02 || (smoothed < 0.02 && prev >= 0.02)) {
+          this.handlers.onLevelChange(username, smoothed);
         }
       }
     }, 100);
@@ -464,12 +527,12 @@ export class VoiceClient {
       clearInterval(this.levelCheckInterval);
       this.levelCheckInterval = null;
     }
-    // Notify all as not speaking
-    for (const [username] of this.speakingState) {
-      this.handlers.onSpeakingChange(username, false);
+    // Notify all as silent
+    for (const [username] of this.userLevels) {
+      this.handlers.onLevelChange(username, 0);
     }
     this.analysers.clear();
-    this.speakingState.clear();
+    this.userLevels.clear();
     this.producerUsernames.clear();
     this.audioContext?.close();
     this.audioContext = null;
@@ -653,10 +716,21 @@ export class VoiceClient {
     this.recvTransport?.close();
     this.consumers.forEach((c) => c.close());
     this.consumers.clear();
-    this.audioElements.forEach((a) => { a.srcObject = null; });
-    this.audioElements.clear();
-    this.userAudioElements.clear();
+    this.userGainNodes.forEach((g) => g.disconnect());
+    this.userGainNodes.clear();
     this.userBaseVolumes.clear();
+    this.userMutedState.clear();
+    if (this.voiceAudio) {
+      this.voiceAudio.srcObject = null;
+      this.voiceAudio.pause();
+      this.voiceAudio = null;
+    }
+    this.compressorNode?.disconnect();
+    this.compressorNode = null;
+    this.makeupGainNode?.disconnect();
+    this.makeupGainNode = null;
+    this.recvDestination?.disconnect();
+    this.recvDestination = null;
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.rawMicStream = null;
     this.micGainNode = null;
@@ -695,13 +769,12 @@ export class VoiceClient {
 
   setUserVolume(username: string, volume: number) {
     this.userBaseVolumes.set(username, volume);
-    const audio = this.userAudioElements.get(username);
-    if (audio) audio.volume = Math.max(0, Math.min(1, volume * this.speakerGain));
+    this.applyUserGain(username);
   }
 
   setUserMuted(username: string, muted: boolean) {
-    const audio = this.userAudioElements.get(username);
-    if (audio) audio.muted = muted;
+    this.userMutedState.set(username, muted);
+    this.applyUserGain(username);
   }
 
   async switchAudioDevice(deviceId: string) {
@@ -734,9 +807,16 @@ export class VoiceClient {
   setSpeakerGain(gain: number) {
     this.speakerGain = gain;
     localStorage.setItem('speakerGain', String(gain));
-    for (const [username, base] of this.userBaseVolumes) {
-      const audio = this.userAudioElements.get(username);
-      if (audio) audio.volume = Math.max(0, Math.min(1, base * gain));
+    for (const username of this.userGainNodes.keys()) {
+      this.applyUserGain(username);
+    }
+  }
+
+  setNormalizeVoices(enabled: boolean) {
+    this.normalizeVoices = enabled;
+    localStorage.setItem('normalizeVoices', String(enabled));
+    for (const gainNode of this.userGainNodes.values()) {
+      this.routeUserGain(gainNode);
     }
   }
 
@@ -766,10 +846,8 @@ export class VoiceClient {
   }
 
   async switchOutputDevice(deviceId: string) {
-    for (const audio of this.audioElements.values()) {
-      if ('setSinkId' in audio) {
-        await (audio as any).setSinkId(deviceId);
-      }
+    if (this.voiceAudio && 'setSinkId' in this.voiceAudio) {
+      await (this.voiceAudio as any).setSinkId(deviceId);
     }
     for (const audio of this.screenAudioElements.values()) {
       if ('setSinkId' in audio) {
@@ -793,9 +871,7 @@ export class VoiceClient {
   }
 
   setDeafened(deafened: boolean) {
-    for (const audio of this.audioElements.values()) {
-      audio.muted = deafened;
-    }
+    if (this.voiceAudio) this.voiceAudio.muted = deafened;
     for (const audio of this.screenAudioElements.values()) {
       audio.muted = deafened;
     }

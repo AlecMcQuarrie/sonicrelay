@@ -24,6 +24,7 @@ export type UserSettings = {
   vadThreshold?: number;
   pttEnabled?: boolean;
   pttKey?: string;
+  normalizeVoices?: boolean;
   theme?: string;
   customThemeColors?: CustomThemeColors;
 };

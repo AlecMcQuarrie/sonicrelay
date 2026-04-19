@@ -75,6 +75,11 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
     voiceRef.current?.setPttEnabled(enabled);
   };
 
+  const saveNormalizeVoices = (enabled: boolean) => {
+    updateSettings({ normalizeVoices: enabled });
+    voiceRef.current?.setNormalizeVoices(enabled);
+  };
+
   const savePttKey = (key: string) => {
     updateSettings({ pttKey: key });
     voiceRef.current?.setPttKey(key);
@@ -134,11 +139,19 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
         </div>
         <Slider
           min={0}
-          max={100}
+          max={200}
           step={1}
           value={[Math.round(settings.speakerGain * 100)]}
           onValueChange={([v]) => saveSpeakerGain(v / 100)}
         />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Normalize voices</label>
+          <Switch checked={settings.normalizeVoices} onCheckedChange={saveNormalizeVoices} />
+        </div>
+        <p className="text-xs text-muted-foreground">Auto-level quiet and loud speakers.</p>
       </div>
 
       <div className="space-y-1.5">
