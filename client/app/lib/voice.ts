@@ -224,6 +224,13 @@ export class VoiceClient {
       this.makeupGainNode.connect(this.recvDestination);
       this.voiceAudio = this.createAudioElement();
       this.voiceAudio.srcObject = this.recvDestination.stream;
+      // Chromium silently drops audio from a MediaStreamAudioDestinationNode
+      // when the <audio> element isn't attached to the DOM. A detached element
+      // works fine for mediasoup tracks set directly as srcObject (the old
+      // code path) but not for tracks that come from a Web Audio graph, which
+      // is why nothing was audible.
+      this.voiceAudio.style.display = 'none';
+      document.body.appendChild(this.voiceAudio);
       this.voiceAudio.play().catch(() => {});
 
       // Get router capabilities and join the room
@@ -723,6 +730,7 @@ export class VoiceClient {
     if (this.voiceAudio) {
       this.voiceAudio.srcObject = null;
       this.voiceAudio.pause();
+      this.voiceAudio.remove();
       this.voiceAudio = null;
     }
     this.compressorNode?.disconnect();
