@@ -16,4 +16,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => { ipcRenderer.removeListener('update-download-progress', handler); };
   },
   showNotification: (title: string, body: string) => ipcRenderer.invoke('show-notification', title, body),
+  // Remote control — the main process injects OS input via nut.js, but only
+  // while a session is armed. The renderer arms on grant, disarms on end.
+  remoteControl: {
+    queryCapability: () => ipcRenderer.invoke('rc-query-capability'),
+    armSession: (sessionId: string) => ipcRenderer.invoke('rc-arm-session', sessionId),
+    disarmSession: () => ipcRenderer.invoke('rc-disarm-session'),
+    injectInput: (sessionId: string, event: unknown) => ipcRenderer.send('rc-inject-input', sessionId, event),
+    openAccessibilitySettings: () => ipcRenderer.invoke('rc-open-accessibility-settings'),
+    clearSharedDisplay: () => ipcRenderer.invoke('rc-clear-shared-display'),
+    onSessionEnded: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('rc-session-ended', handler);
+      return () => { ipcRenderer.removeListener('rc-session-ended', handler); };
+    },
+  },
 });

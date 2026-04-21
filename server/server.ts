@@ -14,6 +14,7 @@ import dmRoutes from './routes/dm';
 import uploadRoutes from './routes/uploads';
 import readStatusRoutes from './routes/read-status';
 import serverInfoRoutes from './routes/server-info';
+import { handleRemoteControlMessage, revokeSessionsFor } from './routes/remote-control';
 import { loadServerConfig } from './config';
 
 const jwt = require("jsonwebtoken");
@@ -204,6 +205,7 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
         channelId: client.voiceChannelId, username,
       });
     }
+    revokeSessionsFor(username);
     clients.delete(ws);
     clientPings.delete(ws);
     broadcastPresence();
@@ -376,6 +378,12 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
         client.isDeafened = msg.deafened;
         broadcastToAll({ type: 'deafen-state', username, deafened: msg.deafened });
       }
+      return;
+    }
+
+    // ── Remote control (Electron-only feature; web clients simply never send these) ──
+    if (msg.type === 'remote-control') {
+      await handleRemoteControlMessage(ws, username, msg);
       return;
     }
 

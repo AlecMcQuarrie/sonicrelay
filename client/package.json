@@ -1,6 +1,6 @@
 {
   "name": "sonicrelay-client",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "@react-router/node": "7.13.1",
     "@react-router/serve": "7.13.1",
     "class-variance-authority": "^0.7.1",

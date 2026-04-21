@@ -8,7 +8,7 @@ files:
   - "package.json"
   - "!node_modules/**/*"
 asar: false
-npmRebuild: false
+npmRebuild: true
 extraMetadata:
   main: dist-electron/main.cjs
   type: commonjs

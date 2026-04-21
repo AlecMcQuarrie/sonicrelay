@@ -11,6 +11,9 @@ import { Sheet, SheetContent } from "~/components/ui/sheet";
 import { ServerRailContent } from "~/components/server-rail/ServerRail";
 import { VoiceClient } from "~/lib/voice";
 import type { ScreenShareSettings } from "~/lib/voice";
+import { RemoteControlClient, type RemoteControlSession, type RemoteControlInputEvent } from "~/lib/remoteControl";
+import GrantRequestDialog from "~/components/remote-control/GrantRequestDialog";
+import ActiveSessionBanner from "~/components/remote-control/ActiveSessionBanner";
 import { getProtocol, getWsProtocol } from "~/lib/protocol";
 import { useTheme } from "next-themes";
 import {
@@ -101,6 +104,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   } = useDmState(username, privateKey);
   const wsRef = useRef<WebSocket | null>(null);
   const voiceRef = useRef<VoiceClient | null>(null);
+  const rcClientRef = useRef<RemoteControlClient | null>(null);
+  const [rcSession, setRcSession] = useState<RemoteControlSession | null>(null);
+  const [rcPendingRequest, setRcPendingRequest] = useState<string | null>(null);
   const voicePeerSettingsRef = useRef(voicePeerSettings);
   voicePeerSettingsRef.current = voicePeerSettings;
   const screenAudioPeerSettingsRef = useRef(screenAudioPeerSettings);
@@ -441,6 +447,29 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       // captures its WebSocket in its constructor, so a fresh socket needs a
       // fresh VoiceClient. The old one, if any, is destroyed first.
       voiceRef.current?.destroy();
+      rcClientRef.current?.destroy();
+      setRcSession(null);
+      setRcPendingRequest(null);
+      rcClientRef.current = new RemoteControlClient(ws, username, {
+        onIncomingRequest: (requester) => {
+          // Silently decline when the user has disabled inbound control
+          // requests in settings — no dialog, no sound.
+          if (localStorage.getItem('rcAllowIncoming') === 'false') {
+            rcClientRef.current?.respond(requester, false).catch(() => {});
+            return;
+          }
+          setRcPendingRequest(requester);
+        },
+        onSessionChange: (session) => {
+          setRcSession(session);
+        },
+        onRequestDenied: (sharer) => {
+          window.electronAPI?.showNotification('Request denied', `${sharer} denied your control request.`);
+        },
+        onError: (message) => {
+          console.warn('[remote-control]', message);
+        },
+      });
       const cachedSettings = loadCachedSettings();
       voiceRef.current = new VoiceClient(ws, {
         onPeerJoined: (channelId, user) => {
@@ -506,7 +535,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
             return next;
           });
           // Sync isScreenSharing for local user
-          if (user === username) setIsScreenSharing(!!track);
+          if (user === username) {
+            setIsScreenSharing(!!track);
+            // End any active session + clear stored display bounds in main.
+            if (!track) rcClientRef.current?.screenShareStopped();
+          }
         },
         onSessionSuperseded: () => {
           voiceRef.current?.leave(false);
@@ -554,6 +587,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         setScreenTracks(new Map());
         setScreenAudioUsers(new Set());
         setFocusedVideoUsers(new Set());
+        // Server already revokes rc sessions on disconnect; just mirror state.
+        setRcSession(null);
+        setRcPendingRequest(null);
         // Exponential backoff capped at 30s, with ±20% jitter so a mass
         // reconnect (e.g., server restart) doesn't thundering-herd.
         const base = Math.min(30_000, 500 * 2 ** attempt++);
@@ -571,6 +607,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       if (reconnectTimer) clearTimeout(reconnectTimer);
       voiceRef.current?.leave();
       voiceRef.current?.destroy();
+      rcClientRef.current?.destroy();
+      rcClientRef.current = null;
       wsRef.current?.close();
     };
   }, [serverIP, accessToken]);
@@ -791,6 +829,22 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
 
   const stopScreenShare = useCallback(async () => {
     await voiceRef.current?.stopScreenShare();
+  }, []);
+
+  const requestRemoteControl = useCallback((sharerUsername: string) => {
+    rcClientRef.current?.requestControl(sharerUsername);
+  }, []);
+
+  const sendRemoteInput = useCallback((event: RemoteControlInputEvent) => {
+    rcClientRef.current?.sendInput(event);
+  }, []);
+
+  const releaseRemoteControl = useCallback(() => {
+    rcClientRef.current?.revoke('stopped');
+  }, []);
+
+  const respondRemoteControl = useCallback((requester: string, granted: boolean) => {
+    rcClientRef.current?.respond(requester, granted);
   }, []);
 
   // Register voice actions with the manager so the CrossServerVoiceBar can
@@ -1026,9 +1080,20 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
 
   return (
     <div
-      className="flex flex-1 min-h-0"
+      className="flex flex-col flex-1 min-h-0"
       style={{ display: isActive ? "flex" : "none" }}
     >
+      {isActive && (
+        <ActiveSessionBanner session={rcSession} onStop={releaseRemoteControl} />
+      )}
+      {isActive && (
+        <GrantRequestDialog
+          requesterUsername={rcPendingRequest}
+          onClose={() => setRcPendingRequest(null)}
+          onDecide={respondRemoteControl}
+        />
+      )}
+      <div className="flex flex-1 min-h-0">
       <div className="hidden md:flex w-60 border-r flex-col h-full">
         {channelSidebarStack}
       </div>
@@ -1110,6 +1175,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
               if (track) focusedTracks.set(key, track);
             }
             if (focusedTracks.size === 0) return null;
+            const controlledKey = rcSession?.role === 'controller'
+              ? `screen:${rcSession.sharerUsername}`
+              : null;
             return (
               <FocusedVideo
                 videoTracks={focusedTracks}
@@ -1121,6 +1189,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
                   });
                 }}
                 onCloseAll={() => setFocusedVideoUsers(new Set())}
+                controlledKey={controlledKey}
+                localUsername={username}
+                onSendInput={sendRemoteInput}
+                onReleaseControl={releaseRemoteControl}
+                onRequestControl={requestRemoteControl}
               />
             );
           })()}
@@ -1152,6 +1225,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
           </SheetContent>
         </Sheet>
       )}
+      </div>
     </div>
   );
 }

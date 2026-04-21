@@ -7,6 +7,7 @@ import EqTab from "./settings/EqTab";
 import VideoTab from "./settings/VideoTab";
 import AdminTab from "./settings/AdminTab";
 import LogoutTab from "./settings/LogoutTab";
+import RemoteControlTab from "./settings/RemoteControlTab";
 import type { VoiceClient } from "~/lib/voice";
 import type { UserSettings } from "~/lib/settings";
 
@@ -54,6 +55,7 @@ export default function SettingsModal({
   updateSettings,
 }: SettingsModalProps) {
   const isAdmin = myRole === 'admin' || myRole === 'superadmin';
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -67,6 +69,7 @@ export default function SettingsModal({
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="eq">Mic EQ</TabsTrigger>
             <TabsTrigger value="video">Video</TabsTrigger>
+            {isElectron && <TabsTrigger value="remote-control">Remote Control</TabsTrigger>}
             {isAdmin && <TabsTrigger value="admin">Server Admin</TabsTrigger>}
             <div className="my-1 border-t" />
             <TabsTrigger value="logout" className="text-destructive data-[state=active]:text-destructive">
@@ -96,6 +99,11 @@ export default function SettingsModal({
             <TabsContent value="video">
               <VideoTab voiceRef={voiceRef} />
             </TabsContent>
+            {isElectron && (
+              <TabsContent value="remote-control">
+                <RemoteControlTab />
+              </TabsContent>
+            )}
             {isAdmin && (
               <TabsContent value="admin">
                 <AdminTab

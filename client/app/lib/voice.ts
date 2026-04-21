@@ -130,6 +130,23 @@ export class VoiceClient {
   private compressorNode: DynamicsCompressorNode | null = null;
   private makeupGainNode: GainNode | null = null;
   private masterGainNode: GainNode | null = null;
+  // Tap off the peer-voice mix (post-master, same signal the speakers play)
+  // so startScreenShare can phase-invert it against the system loopback
+  // capture — cancels our own received voices out of the outgoing screen
+  // audio so viewers don't hear themselves. See startScreenShare().
+  private voiceMixDest: MediaStreamAudioDestinationNode | null = null;
+  private mixMinusNodes: AudioNode[] = [];
+  private mixMinusStream: MediaStream | null = null;
+  private mixMinusDelay: DelayNode | null = null;
+  // Passive latency measurer: cross-correlates the peer-voice reference
+  // against the loopback capture to figure out the exact delay to set on
+  // mixMinusDelay. Runs whenever peers are talking; no probe injected.
+  private latencyMeasurerNodes: AudioNode[] = [];
+  private latencyRefBuffer: Float32Array | null = null;
+  private latencyCapBuffer: Float32Array | null = null;
+  private latencyBufferWrite = 0;
+  private latencyBufferFilled = 0;
+  private latencyLastUpdate = 0;
   private normalizeVoices = true;
   private eqEnabled = false;
   private eqBands: { gain: number; q: number }[] = EQ_FREQS.map(() => ({ gain: 0, q: 1 }));
@@ -250,6 +267,11 @@ export class VoiceClient {
       this.compressorNode.connect(this.makeupGainNode);
       this.makeupGainNode.connect(this.masterGainNode);
       this.masterGainNode.connect(this.audioContext.destination);
+      // Second output branch: peer-voice mix as a MediaStream. Used only
+      // while screen-sharing with audio to subtract our own received voices
+      // from the loopback capture (mix-minus).
+      this.voiceMixDest = this.audioContext.createMediaStreamDestination();
+      this.masterGainNode.connect(this.voiceMixDest);
 
       // Route the AudioContext itself to the user's chosen output device.
       // Chrome 110+ / Electron 35 supports AudioContext.setSinkId; older
@@ -484,6 +506,196 @@ export class VoiceClient {
 
     if (username) this.producerUsernames.delete(producerId);
     this.producerSources.delete(producerId);
+  }
+
+  // Mix-minus: outgoing screen audio = loopback capture - (peer voice mix).
+  // We phase-invert the peer voice tap, delay it to match the loopback
+  // round-trip, then sum with the loopback. Residual = game/app audio
+  // minus the peers we're playing. Initial delay is seeded from the
+  // browser-reported output latency; installLatencyMeasurer refines it
+  // live by cross-correlating the reference against the capture whenever
+  // peers are actually talking.
+  private buildMixMinusTrack(loopbackTrack: MediaStreamTrack): MediaStreamTrack | null {
+    const ctx = this.audioContext;
+    const voiceMix = this.voiceMixDest;
+    if (!ctx || !voiceMix) return null;
+    try {
+      this.tearDownMixMinus();
+      const loopbackStream = new MediaStream([loopbackTrack]);
+      const loopbackSource = ctx.createMediaStreamSource(loopbackStream);
+      const voiceSource = ctx.createMediaStreamSource(voiceMix.stream);
+      const delay = ctx.createDelay(1);
+      const reportedLatency = (ctx as any).outputLatency;
+      const initial = typeof reportedLatency === 'number' && reportedLatency > 0
+        ? Math.max(0.02, Math.min(0.3, reportedLatency * 2))
+        : 0.06;
+      delay.delayTime.value = initial;
+      const inverter = ctx.createGain();
+      inverter.gain.value = -1;
+      const summer = ctx.createGain();
+      summer.gain.value = 1;
+      const dest = ctx.createMediaStreamDestination();
+      loopbackSource.connect(summer);
+      voiceSource.connect(delay).connect(inverter).connect(summer);
+      summer.connect(dest);
+      const outTrack = dest.stream.getAudioTracks()[0];
+      if (!outTrack) return null;
+      this.mixMinusDelay = delay;
+      this.mixMinusNodes = [loopbackSource, voiceSource, delay, inverter, summer, dest];
+      this.mixMinusStream = dest.stream;
+      this.installLatencyMeasurer(voiceSource, loopbackSource);
+      return outTrack;
+    } catch {
+      this.tearDownMixMinus();
+      return null;
+    }
+  }
+
+  // Taps the same voice-mix reference and loopback streams the mix-minus
+  // uses, copies them into ring buffers via a ScriptProcessorNode, and
+  // periodically cross-correlates to find the real round-trip delay.
+  private installLatencyMeasurer(voiceSource: AudioNode, loopbackSource: AudioNode) {
+    const ctx = this.audioContext;
+    if (!ctx) return;
+    try {
+      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.5); // 500ms window
+      this.latencyRefBuffer = new Float32Array(BUFFER_SAMPLES);
+      this.latencyCapBuffer = new Float32Array(BUFFER_SAMPLES);
+      this.latencyBufferWrite = 0;
+      this.latencyBufferFilled = 0;
+      this.latencyLastUpdate = 0;
+
+      // Merge ref + capture into a single 2-channel stream so one
+      // ScriptProcessor can see both with aligned timing.
+      const merger = ctx.createChannelMerger(2);
+      voiceSource.connect(merger, 0, 0);
+      loopbackSource.connect(merger, 0, 1);
+      // ScriptProcessor is deprecated but universally supported in Electron
+      // and avoids the overhead of loading an AudioWorklet module. The work
+      // on the audio thread is trivial (ring-buffer copy); correlation runs
+      // on the main thread via queueMicrotask.
+      const proc = ctx.createScriptProcessor(4096, 2, 1);
+      merger.connect(proc);
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
+      proc.connect(silent);
+      silent.connect(ctx.destination);
+
+      proc.onaudioprocess = (event) => {
+        const ref = event.inputBuffer.getChannelData(0);
+        const cap = event.inputBuffer.getChannelData(1);
+        const refBuf = this.latencyRefBuffer;
+        const capBuf = this.latencyCapBuffer;
+        if (!refBuf || !capBuf) return;
+        const size = refBuf.length;
+        let w = this.latencyBufferWrite;
+        for (let i = 0; i < ref.length; i++) {
+          refBuf[w] = ref[i];
+          capBuf[w] = cap[i];
+          w = w + 1;
+          if (w >= size) w = 0;
+        }
+        this.latencyBufferWrite = w;
+        this.latencyBufferFilled = Math.min(this.latencyBufferFilled + ref.length, size);
+
+        const now = performance.now();
+        if (this.latencyBufferFilled >= size && now - this.latencyLastUpdate > 2000) {
+          this.latencyLastUpdate = now;
+          queueMicrotask(() => this.runLatencyCorrelation());
+        }
+      };
+
+      this.latencyMeasurerNodes = [merger, proc, silent];
+    } catch {
+      // If the measurer fails to install, mix-minus still runs at the
+      // seeded delay; cancellation is just less precise.
+    }
+  }
+
+  private runLatencyCorrelation() {
+    const ctx = this.audioContext;
+    const ref = this.latencyRefBuffer;
+    const cap = this.latencyCapBuffer;
+    const delayNode = this.mixMinusDelay;
+    if (!ctx || !ref || !cap || !delayNode) return;
+    const size = ref.length;
+    const sr = ctx.sampleRate;
+    const write = this.latencyBufferWrite;
+
+    // Linearize the ring buffers so array indexing matches time order.
+    const lin = (src: Float32Array) => {
+      const out = new Float32Array(size);
+      const tailLen = size - write;
+      out.set(src.subarray(write), 0);
+      out.set(src.subarray(0, write), tailLen);
+      return out;
+    };
+    const refLin = lin(ref);
+    const capLin = lin(cap);
+
+    // Gate on reference energy — correlating silence produces random peaks.
+    const gateWin = Math.min(size, Math.round(0.1 * sr));
+    let rmsSq = 0;
+    for (let i = size - gateWin; i < size; i++) rmsSq += refLin[i] * refLin[i];
+    const rms = Math.sqrt(rmsSq / gateWin);
+    if (rms < 0.005) return;
+
+    // 100ms correlation window against lags from 0 to 300ms. Capture is
+    // always delayed vs reference, so we only search in the positive-lag
+    // direction.
+    const winSize = Math.round(0.1 * sr);
+    const winStart = size - winSize;
+    const minLag = 0;
+    const maxLag = Math.min(winStart, Math.round(0.3 * sr));
+
+    let bestLag = minLag;
+    let bestCorr = -Infinity;
+    let sumAbsCorr = 0;
+    let samples = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      const capStart = winStart - lag;
+      let sum = 0;
+      for (let j = 0; j < winSize; j++) {
+        sum += refLin[winStart + j] * capLin[capStart + j];
+      }
+      sumAbsCorr += Math.abs(sum);
+      samples++;
+      if (sum > bestCorr) {
+        bestCorr = sum;
+        bestLag = lag;
+      }
+    }
+
+    // Require the peak to stand clearly above the average absolute
+    // correlation — otherwise we're fitting to noise and would jitter the
+    // delay for no gain.
+    const meanAbs = samples > 0 ? sumAbsCorr / samples : 0;
+    if (bestCorr < meanAbs * 4) return;
+
+    const measuredSec = bestLag / sr;
+    try {
+      delayNode.delayTime.cancelScheduledValues(ctx.currentTime);
+      // Smooth ramp so the delay change doesn't introduce an audible pitch
+      // wobble in whatever voice-mix content is currently being subtracted.
+      delayNode.delayTime.setTargetAtTime(measuredSec, ctx.currentTime, 0.25);
+    } catch {}
+  }
+
+  private tearDownMixMinus() {
+    for (const n of this.mixMinusNodes) { try { n.disconnect(); } catch {} }
+    this.mixMinusNodes = [];
+    for (const n of this.latencyMeasurerNodes) {
+      try { (n as ScriptProcessorNode).onaudioprocess = null as any; } catch {}
+      try { n.disconnect(); } catch {}
+    }
+    this.latencyMeasurerNodes = [];
+    this.mixMinusDelay = null;
+    this.latencyRefBuffer = null;
+    this.latencyCapBuffer = null;
+    this.latencyBufferWrite = 0;
+    this.latencyBufferFilled = 0;
+    this.mixMinusStream?.getTracks().forEach((t) => t.stop());
+    this.mixMinusStream = null;
   }
 
   private buildMicGraph(stream: MediaStream): MediaStreamTrack {
@@ -735,10 +947,14 @@ export class VoiceClient {
       },
     });
 
-    // Produce screen audio if the user shared a tab/window with audio
+    // Produce screen audio if the user shared a tab/window with audio.
+    // Run it through a mix-minus graph that subtracts our own received peer
+    // voices from the loopback so viewers don't hear themselves in the
+    // screen-share audio. See `voiceMixDest` for the tap point.
     const audioTrack = this.screenStream.getAudioTracks()[0];
     if (audioTrack) {
-      this.screenAudioProducer = await this.sendTransport.produce({ track: audioTrack, appData: { source: 'screen-audio' } });
+      const outgoingTrack = this.buildMixMinusTrack(audioTrack) ?? audioTrack;
+      this.screenAudioProducer = await this.sendTransport.produce({ track: outgoingTrack, appData: { source: 'screen-audio' } });
     }
 
     if (this.localUsername) {
@@ -767,6 +983,7 @@ export class VoiceClient {
 
     this.screenStream?.getTracks().forEach((t) => t.stop());
     this.screenStream = null;
+    this.tearDownMixMinus();
 
     if (this.localUsername) {
       this.handlers.onScreenTrack(this.localUsername, null);
@@ -830,6 +1047,9 @@ export class VoiceClient {
     this.trackPumpers.clear();
     this.userBaseVolumes.clear();
     this.userMutedState.clear();
+    this.tearDownMixMinus();
+    this.voiceMixDest?.disconnect();
+    this.voiceMixDest = null;
     this.compressorNode?.disconnect();
     this.compressorNode = null;
     this.makeupGainNode?.disconnect();
