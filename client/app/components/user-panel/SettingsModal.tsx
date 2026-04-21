@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "~/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "~/components/ui/tabs";
 import AccountTab from "./settings/AccountTab";
 import VoiceTab from "./settings/VoiceTab";
+import EqTab from "./settings/EqTab";
 import VideoTab from "./settings/VideoTab";
 import AdminTab from "./settings/AdminTab";
 import LogoutTab from "./settings/LogoutTab";
@@ -64,6 +65,7 @@ export default function SettingsModal({
           <TabsList className="w-32 shrink-0">
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="voice">Voice</TabsTrigger>
+            <TabsTrigger value="eq">Mic EQ</TabsTrigger>
             <TabsTrigger value="video">Video</TabsTrigger>
             {isAdmin && <TabsTrigger value="admin">Server Admin</TabsTrigger>}
             <div className="my-1 border-t" />
@@ -87,6 +89,9 @@ export default function SettingsModal({
             </TabsContent>
             <TabsContent value="voice">
               <VoiceTab voiceRef={voiceRef} settings={settings} updateSettings={updateSettings} />
+            </TabsContent>
+            <TabsContent value="eq">
+              <EqTab voiceRef={voiceRef} settings={settings} updateSettings={updateSettings} />
             </TabsContent>
             <TabsContent value="video">
               <VideoTab voiceRef={voiceRef} />

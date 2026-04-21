@@ -165,6 +165,20 @@ const SETTING_VALIDATORS: Record<string, (v: unknown) => unknown | undefined> = 
   pttEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   pttKey: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
   normalizeVoices: (v) => typeof v === 'boolean' ? v : undefined,
+  micEqEnabled: (v) => typeof v === 'boolean' ? v : undefined,
+  micEqBands: (v) => {
+    if (!Array.isArray(v) || v.length !== 5) return undefined;
+    const out: { gain: number; q: number }[] = [];
+    for (const band of v) {
+      if (!band || typeof band !== 'object') return undefined;
+      const g = (band as any).gain;
+      const q = (band as any).q;
+      if (typeof g !== 'number' || g < -12 || g > 12) return undefined;
+      if (typeof q !== 'number' || q < 0.1 || q > 10) return undefined;
+      out.push({ gain: g, q });
+    }
+    return out;
+  },
   theme: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
   customThemeColors: (v) => {
     if (!v || typeof v !== 'object') return undefined;

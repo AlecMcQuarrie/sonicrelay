@@ -17,6 +17,11 @@ export type CustomThemeColors = {
   destructive: string;
 };
 
+export type EqBand = {
+  gain: number;
+  q: number;
+};
+
 export type UserSettings = {
   micGain?: number;
   speakerGain?: number;
@@ -25,6 +30,8 @@ export type UserSettings = {
   pttEnabled?: boolean;
   pttKey?: string;
   normalizeVoices?: boolean;
+  micEqEnabled?: boolean;
+  micEqBands?: EqBand[];
   theme?: string;
   customThemeColors?: CustomThemeColors;
 };

@@ -13,12 +13,12 @@ export default function InputLevelMeter({ deviceId, vadMode, vadThreshold }: Inp
   const fillRef = useRef<HTMLDivElement>(null);
   const thresholdRef = useRef<HTMLDivElement>(null);
   const valueRef = useRef<HTMLSpanElement>(null);
-  const noiseFloorRef = useRef(10);
-  const autoThresholdRef = useRef(25);
+  const noiseFloorRef = useRef(3);
+  const autoThresholdRef = useRef(9);
 
   useEffect(() => {
-    noiseFloorRef.current = 10;
-    autoThresholdRef.current = 25;
+    noiseFloorRef.current = 3;
+    autoThresholdRef.current = 9;
 
     let cancelled = false;
     let stream: MediaStream | null = null;
@@ -53,10 +53,15 @@ export default function InputLevelMeter({ deviceId, vadMode, vadThreshold }: Inp
           if (vadMode === 'manual') {
             threshold = vadThreshold;
           } else if (vadMode === 'auto') {
-            if (avg < autoThresholdRef.current) {
-              noiseFloorRef.current = noiseFloorRef.current * 0.94 + avg * 0.06;
+            // Mirrors the VoiceClient auto-VAD: slow rise / fast fall noise
+            // tracking, small additive margin, hard cap on threshold.
+            const quietCap = noiseFloorRef.current + 4;
+            if (avg < quietCap) {
+              const alpha = avg > noiseFloorRef.current ? 0.02 : 0.25;
+              noiseFloorRef.current = noiseFloorRef.current * (1 - alpha) + avg * alpha;
             }
-            autoThresholdRef.current = Math.min(Math.max(noiseFloorRef.current * 2.5 + 8, 8), 60);
+            noiseFloorRef.current = Math.max(0.5, Math.min(noiseFloorRef.current, 20));
+            autoThresholdRef.current = Math.min(Math.max(noiseFloorRef.current + 6, 5), 40);
             threshold = autoThresholdRef.current;
           } else {
             threshold = 0;

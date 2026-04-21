@@ -1,6 +1,11 @@
 import { Device } from 'mediasoup-client';
 import type { types } from 'mediasoup-client';
 
+// Fixed center frequencies for the 5-band mic EQ. Kept here (duplicated with
+// settings.ts intentionally) so VoiceClient doesn't import UI/settings code.
+const EQ_FREQS = [80, 250, 1000, 4000, 10000];
+const EQ_TYPES: BiquadFilterType[] = ['lowshelf', 'peaking', 'peaking', 'peaking', 'highshelf'];
+
 export type ScreenShareSettings = {
   resolution: 720 | 1080 | 1440;
   frameRate: 30 | 60;
@@ -112,7 +117,8 @@ export class VoiceClient {
   private speakerGain = 1;
   private vadMode: 'off' | 'auto' | 'manual' = 'off';
   private vadThreshold = 30;
-  private vadNoiseFloor = 10;
+  private vadNoiseFloor = 3;
+  private vadHangoverUntil = 0; // timestamp until which auto-VAD keeps the gate open
   private pttEnabled = false;
   private pttKey = '';
   private pttHeld = false;
@@ -124,7 +130,10 @@ export class VoiceClient {
   private compressorNode: DynamicsCompressorNode | null = null;
   private makeupGainNode: GainNode | null = null;
   private masterGainNode: GainNode | null = null;
-  private normalizeVoices = false;
+  private normalizeVoices = true;
+  private eqEnabled = false;
+  private eqBands: { gain: number; q: number }[] = EQ_FREQS.map(() => ({ gain: 0, q: 1 }));
+  private eqNodes: BiquadFilterNode[] = [];
   private keyDownHandler: (e: KeyboardEvent) => void;
   private keyUpHandler: (e: KeyboardEvent) => void;
   private joinInProgress = false;
@@ -141,7 +150,23 @@ export class VoiceClient {
     this.vadThreshold = parseFloat(localStorage.getItem('vadThreshold') ?? '30');
     this.pttEnabled = localStorage.getItem('pttEnabled') === 'true';
     this.pttKey = localStorage.getItem('pttKey') ?? '';
-    this.normalizeVoices = localStorage.getItem('normalizeVoices') === 'true';
+    // Default ON when no stored value — existing users who explicitly turned
+    // normalization off keep their preference.
+    const storedNormalize = localStorage.getItem('normalizeVoices');
+    this.normalizeVoices = storedNormalize === null ? true : storedNormalize === 'true';
+    this.eqEnabled = localStorage.getItem('micEqEnabled') === 'true';
+    const storedBands = localStorage.getItem('micEqBands');
+    if (storedBands) {
+      try {
+        const parsed = JSON.parse(storedBands);
+        if (Array.isArray(parsed) && parsed.length === 5) {
+          this.eqBands = parsed.map((b: any) => ({
+            gain: typeof b?.gain === 'number' ? b.gain : 0,
+            q: typeof b?.q === 'number' ? b.q : 1,
+          }));
+        }
+      } catch {}
+    }
 
     // PTT listeners — always installed, gated on pttEnabled so toggling
     // from the settings tab takes effect without rewiring event handlers.
@@ -466,6 +491,8 @@ export class VoiceClient {
     this.micGainNode?.disconnect();
     this.vadGateNode?.disconnect();
     this.micDestination?.disconnect();
+    this.eqNodes.forEach((n) => n.disconnect());
+    this.eqNodes = [];
 
     const source = this.audioContext.createMediaStreamSource(stream);
     this.micGainNode = this.audioContext.createGain();
@@ -475,7 +502,23 @@ export class VoiceClient {
     this.vadGateNode.gain.value = 1;
     this.micDestination = this.audioContext.createMediaStreamDestination();
 
-    source.connect(this.micGainNode);
+    // Always build the EQ chain — keeps wiring stable across enable/disable.
+    // When disabled, all band gains are zeroed so the biquads are transparent.
+    for (let i = 0; i < EQ_FREQS.length; i++) {
+      const filter = this.audioContext.createBiquadFilter();
+      filter.type = EQ_TYPES[i];
+      filter.frequency.value = EQ_FREQS[i];
+      filter.Q.value = this.eqBands[i].q;
+      filter.gain.value = this.eqEnabled ? this.eqBands[i].gain : 0;
+      this.eqNodes.push(filter);
+    }
+
+    let prev: AudioNode = source;
+    for (const filter of this.eqNodes) {
+      prev.connect(filter);
+      prev = filter;
+    }
+    prev.connect(this.micGainNode);
     this.micGainNode.connect(this.vadGateNode);
     this.vadGateNode.connect(this.micDestination);
 
@@ -492,14 +535,52 @@ export class VoiceClient {
     } else if (this.vadMode === 'manual') {
       open = this.lastLocalRms > this.vadThreshold;
     } else {
-      // auto: track noise floor, derive adaptive threshold
-      if (this.lastLocalRms < this.vadNoiseFloor * 2.5 + 8) {
-        this.vadNoiseFloor = this.vadNoiseFloor * 0.94 + this.lastLocalRms * 0.06;
+      // Auto VAD with:
+      //  - conservative noise-floor tracking (only adapts when clearly quiet,
+      //    rises slowly, falls quickly — so speech tails never poison it)
+      //  - hysteresis: open threshold above close threshold so the gate
+      //    doesn't chatter around the boundary
+      //  - hangover: once open, stay open ~400ms after RMS drops so we don't
+      //    cut between syllables
+      const rms = this.lastLocalRms;
+      const now = performance.now();
+
+      const quietCap = this.vadNoiseFloor + 4; // only sample when clearly not speech
+      if (rms < quietCap) {
+        // Asymmetric smoothing: rise slowly (α=0.02), fall fast (α=0.25).
+        const alpha = rms > this.vadNoiseFloor ? 0.02 : 0.25;
+        this.vadNoiseFloor = this.vadNoiseFloor * (1 - alpha) + rms * alpha;
       }
-      const autoThresh = Math.min(Math.max(this.vadNoiseFloor * 2.5 + 8, 8), 60);
-      open = this.lastLocalRms > autoThresh;
+      this.vadNoiseFloor = Math.max(0.5, Math.min(this.vadNoiseFloor, 20));
+
+      const openThresh = Math.min(Math.max(this.vadNoiseFloor + 6, 5), 40);
+      const closeThresh = openThresh * 0.6;
+
+      const wasHeld = now < this.vadHangoverUntil;
+      if (rms > openThresh) {
+        this.vadHangoverUntil = now + 400;
+        open = true;
+      } else if (rms > closeThresh && wasHeld) {
+        open = true;
+      } else {
+        open = wasHeld;
+      }
     }
-    this.vadGateNode.gain.value = open ? 1 : 0;
+    // Short ramp avoids audible clicks on gate toggle. Web Audio ignores
+    // setTargetAtTime timing on a disconnected node, so wrap in a try just in
+    // case the graph was torn down mid-tick.
+    try {
+      const param = this.vadGateNode.gain;
+      const ctx = this.audioContext;
+      if (ctx) {
+        param.cancelScheduledValues(ctx.currentTime);
+        param.setTargetAtTime(open ? 1 : 0, ctx.currentTime, 0.015);
+      } else {
+        param.value = open ? 1 : 0;
+      }
+    } catch {
+      this.vadGateNode.gain.value = open ? 1 : 0;
+    }
   }
 
   private startLevelMonitoring() {
@@ -757,6 +838,8 @@ export class VoiceClient {
     this.masterGainNode = null;
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.rawMicStream = null;
+    this.eqNodes.forEach((n) => n.disconnect());
+    this.eqNodes = [];
     this.micGainNode = null;
     this.vadGateNode = null;
     this.micDestination = null;
@@ -844,9 +927,34 @@ export class VoiceClient {
     }
   }
 
+  setMicEqEnabled(enabled: boolean) {
+    this.eqEnabled = enabled;
+    localStorage.setItem('micEqEnabled', String(enabled));
+    // Re-apply band gains — zero them when disabled for transparent passthrough.
+    this.eqNodes.forEach((filter, i) => {
+      filter.gain.value = enabled ? this.eqBands[i].gain : 0;
+    });
+  }
+
+  setEqBand(index: number, gain: number, q: number) {
+    if (index < 0 || index >= EQ_FREQS.length) return;
+    this.eqBands[index] = { gain, q };
+    localStorage.setItem('micEqBands', JSON.stringify(this.eqBands));
+    const filter = this.eqNodes[index];
+    if (filter) {
+      filter.gain.value = this.eqEnabled ? gain : 0;
+      filter.Q.value = q;
+    }
+  }
+
+  getMicDestinationStream(): MediaStream | null {
+    return this.micDestination?.stream ?? null;
+  }
+
   setVadMode(mode: 'off' | 'auto' | 'manual') {
     this.vadMode = mode;
-    this.vadNoiseFloor = 10;
+    this.vadNoiseFloor = 3;
+    this.vadHangoverUntil = 0;
     localStorage.setItem('vadMode', mode);
     this.updateVadGate();
   }
