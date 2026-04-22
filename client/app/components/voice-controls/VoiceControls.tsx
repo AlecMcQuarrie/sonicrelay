@@ -10,17 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff, Headphones, HeadphoneOff } from "lucide-react";
-import type { ScreenShareSettings } from "~/lib/voice";
-
-// Bitrate targets by resolution and frame rate (must match SCREEN_BITRATES in voice.ts)
-const SCREEN_BITRATES: Record<string, number> = {
-  '720-30':  2_500_000,
-  '720-60':  4_000_000,
-  '1080-30': 4_000_000,
-  '1080-60': 8_000_000,
-  '1440-30': 6_000_000,
-  '1440-60': 12_000_000,
-};
+import { SCREEN_BITRATES, type ScreenShareSettings } from "~/lib/voice";
 
 function formatBitrate(bps: number): string {
   return `${(bps / 1_000_000).toFixed(1)} Mbps`;

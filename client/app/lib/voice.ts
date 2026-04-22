@@ -1,8 +1,6 @@
 import { Device } from 'mediasoup-client';
 import type { types } from 'mediasoup-client';
 
-// Fixed center frequencies for the 5-band mic EQ. Kept here (duplicated with
-// settings.ts intentionally) so VoiceClient doesn't import UI/settings code.
 const EQ_FREQS = [80, 250, 1000, 4000, 10000];
 const EQ_TYPES: BiquadFilterType[] = ['lowshelf', 'peaking', 'peaking', 'peaking', 'highshelf'];
 
@@ -12,7 +10,7 @@ export type ScreenShareSettings = {
 };
 
 // Bitrate targets by resolution and frame rate (matches Discord Nitro-tier quality)
-const SCREEN_BITRATES: Record<string, number> = {
+export const SCREEN_BITRATES: Record<string, number> = {
   '720-30':  2_500_000,
   '720-60':  4_000_000,
   '1080-30': 4_000_000,
@@ -89,11 +87,9 @@ export class VoiceClient {
   private screenAudioProducer: types.Producer | null = null;
   private screenStream: MediaStream | null = null;
   private consumers = new Map<string, types.Consumer>();
-  private videoProducerIds = new Set<string>(); // producer IDs that are camera video
-  private screenProducerIds = new Set<string>(); // producer IDs that are screen share video
-  private screenAudioProducerIds = new Set<string>(); // producer IDs that are screen share audio
   private screenAudioElements = new Map<string, HTMLAudioElement>(); // username -> audio element
-  private producerSources = new Map<string, string>(); // producerId -> 'camera' | 'screen' | 'screen-audio'
+  // producerId -> kind. 'mic' is the default for audio producers with no source tag.
+  private producerSources = new Map<string, 'mic' | 'camera' | 'screen' | 'screen-audio'>();
   private ws: WebSocket;
   private channelId: string | null = null;
   private handlers: VoiceHandlers;
@@ -138,9 +134,14 @@ export class VoiceClient {
   private mixMinusNodes: AudioNode[] = [];
   private mixMinusStream: MediaStream | null = null;
   private mixMinusDelay: DelayNode | null = null;
-  // Passive latency measurer: cross-correlates the peer-voice reference
-  // against the loopback capture to figure out the exact delay to set on
-  // mixMinusDelay. Runs whenever peers are talking; no probe injected.
+  // Inverter gain — adaptively tuned to match the loopback-vs-reference
+  // level ratio. Starts at -1, refined by the latency measurer to the
+  // least-squares scale that minimizes residual. Matters because the
+  // loopback path goes through OS/app volume, which is rarely unity.
+  private mixMinusInverter: GainNode | null = null;
+  // Passive latency + scale measurer: cross-correlates the peer-voice
+  // reference against the loopback capture to find the delay AND the gain
+  // ratio that best cancels the reference out of the capture. No probe.
   private latencyMeasurerNodes: AudioNode[] = [];
   private latencyRefBuffer: Float32Array | null = null;
   private latencyCapBuffer: Float32Array | null = null;
@@ -312,19 +313,39 @@ export class VoiceClient {
       // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
       // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
       const preferredAudio = localStorage.getItem("preferredAudioDevice");
+      const micConstraints = {
+        autoGainControl: false,
+        echoCancellation: true,
+        noiseSuppression: true,
+        channelCount: 1,
+        sampleRate: 48000,
+      };
       try {
         this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-          audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), autoGainControl: false },
+          audio: { ...(preferredAudio && { deviceId: { exact: preferredAudio } }), ...micConstraints },
         });
       } catch (err) {
         // Stored device is gone or no longer matches — drop it and use default.
         if (preferredAudio) localStorage.removeItem("preferredAudioDevice");
         this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-          audio: { autoGainControl: false },
+          audio: micConstraints,
         });
       }
       const gatedTrack = this.buildMicGraph(this.rawMicStream);
-      this.audioProducer = await this.sendTransport.produce({ track: gatedTrack });
+      // opusFec: in-band Forward Error Correction — recovers single lost packets
+      //   without retransmit. Biggest audible win on lossy networks.
+      // opusNack: NACK-based retransmission of lost audio packets.
+      // opusDtx:  skip silence between words to save bandwidth (mic is mono voice).
+      // opusStereo=false: explicit mono; stereo on a single mic is wasted bits.
+      this.audioProducer = await this.sendTransport.produce({
+        track: gatedTrack,
+        codecOptions: {
+          opusFec: true,
+          opusNack: true,
+          opusDtx: true,
+          opusStereo: false,
+        },
+      });
 
       // Monitor local mic audio levels on the raw (pre-gate) stream so the
       // level meter reflects actual input, not what's being transmitted.
@@ -383,25 +404,26 @@ export class VoiceClient {
 
     this.consumers.set(producerId, consumer);
     const remoteUsername = this.producerUsernames.get(producerId);
-    const source = this.producerSources.get(producerId) || 'camera';
+    // Default audio = mic, default video = camera.
+    let source = this.producerSources.get(producerId);
+    if (!source) {
+      source = consumer.kind === 'video' ? 'camera' : 'mic';
+      this.producerSources.set(producerId, source);
+    }
 
     if (consumer.kind === 'video') {
-      if (source === 'screen') {
-        this.screenProducerIds.add(producerId);
-        if (remoteUsername) this.handlers.onScreenTrack(remoteUsername, consumer.track);
-      } else {
-        this.videoProducerIds.add(producerId);
-        if (remoteUsername) this.handlers.onVideoTrack(remoteUsername, consumer.track);
+      if (remoteUsername) {
+        if (source === 'screen') this.handlers.onScreenTrack(remoteUsername, consumer.track);
+        else this.handlers.onVideoTrack(remoteUsername, consumer.track);
       }
       return;
     }
 
     // Screen share audio — track separately for per-user volume control
     if (source === 'screen-audio' && remoteUsername) {
-      this.screenAudioProducerIds.add(producerId);
       const audio = this.createAudioElement();
       audio.srcObject = new MediaStream([consumer.track]);
-      audio.play();
+      audio.play().catch(() => {});
       this.screenAudioElements.set(remoteUsername, audio);
       this.handlers.onScreenAudioChange(remoteUsername, true);
       return;
@@ -469,52 +491,47 @@ export class VoiceClient {
     }
 
     const username = this.producerUsernames.get(producerId);
+    const source = this.producerSources.get(producerId);
 
-    if (this.screenAudioProducerIds.has(producerId)) {
-      this.screenAudioProducerIds.delete(producerId);
+    if (source === 'screen-audio') {
       if (username) {
         const audio = this.screenAudioElements.get(username);
         if (audio) { audio.srcObject = null; this.screenAudioElements.delete(username); }
         this.handlers.onScreenAudioChange(username, false);
       }
-    } else if (this.screenProducerIds.has(producerId)) {
-      this.screenProducerIds.delete(producerId);
+    } else if (source === 'screen') {
       if (username) this.handlers.onScreenTrack(username, null);
-    } else if (this.videoProducerIds.has(producerId)) {
-      this.videoProducerIds.delete(producerId);
+    } else if (source === 'camera') {
       if (username) this.handlers.onVideoTrack(username, null);
-    } else {
-      if (username) {
-        const gainNode = this.userGainNodes.get(username);
-        if (gainNode) {
-          gainNode.disconnect();
-          this.userGainNodes.delete(username);
-        }
-        const pumper = this.trackPumpers.get(username);
-        if (pumper) {
-          pumper.srcObject = null;
-          pumper.remove();
-          this.trackPumpers.delete(username);
-        }
-        this.userBaseVolumes.delete(username);
-        this.userMutedState.delete(username);
-        this.analysers.delete(username);
-        this.userLevels.delete(username);
-        this.handlers.onLevelChange(username, 0);
+    } else if (username) {
+      // Mic audio (source === 'mic' or legacy undefined)
+      const gainNode = this.userGainNodes.get(username);
+      if (gainNode) {
+        gainNode.disconnect();
+        this.userGainNodes.delete(username);
       }
+      const pumper = this.trackPumpers.get(username);
+      if (pumper) {
+        pumper.srcObject = null;
+        pumper.remove();
+        this.trackPumpers.delete(username);
+      }
+      this.userBaseVolumes.delete(username);
+      this.userMutedState.delete(username);
+      this.analysers.delete(username);
+      this.userLevels.delete(username);
+      this.handlers.onLevelChange(username, 0);
     }
 
     if (username) this.producerUsernames.delete(producerId);
     this.producerSources.delete(producerId);
   }
 
-  // Mix-minus: outgoing screen audio = loopback capture - (peer voice mix).
-  // We phase-invert the peer voice tap, delay it to match the loopback
-  // round-trip, then sum with the loopback. Residual = game/app audio
-  // minus the peers we're playing. Initial delay is seeded from the
-  // browser-reported output latency; installLatencyMeasurer refines it
-  // live by cross-correlating the reference against the capture whenever
-  // peers are actually talking.
+  // Mix-minus: outgoing screen audio = loopback capture - scale * delayed(peer voice mix).
+  // Phase-invert the peer-voice tap, delay it to match the loopback round-trip,
+  // and scale it to match the loopback gain. Both `delay` and `scale` are
+  // estimated live by cross-correlating reference against capture. Residual =
+  // game/app audio minus the peers we're playing.
   private buildMixMinusTrack(loopbackTrack: MediaStreamTrack): MediaStreamTrack | null {
     const ctx = this.audioContext;
     const voiceMix = this.voiceMixDest;
@@ -541,6 +558,7 @@ export class VoiceClient {
       const outTrack = dest.stream.getAudioTracks()[0];
       if (!outTrack) return null;
       this.mixMinusDelay = delay;
+      this.mixMinusInverter = inverter;
       this.mixMinusNodes = [loopbackSource, voiceSource, delay, inverter, summer, dest];
       this.mixMinusStream = dest.stream;
       this.installLatencyMeasurer(voiceSource, loopbackSource);
@@ -553,12 +571,15 @@ export class VoiceClient {
 
   // Taps the same voice-mix reference and loopback streams the mix-minus
   // uses, copies them into ring buffers via a ScriptProcessorNode, and
-  // periodically cross-correlates to find the real round-trip delay.
+  // periodically cross-correlates to find delay + scale.
   private installLatencyMeasurer(voiceSource: AudioNode, loopbackSource: AudioNode) {
     const ctx = this.audioContext;
     if (!ctx) return;
     try {
-      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.5); // 500ms window
+      // 800ms window — long enough to search up to ~600ms of lag (covers
+      // Bluetooth and virtual audio devices) while keeping correlation cost
+      // reasonable on the main thread.
+      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.8);
       this.latencyRefBuffer = new Float32Array(BUFFER_SAMPLES);
       this.latencyCapBuffer = new Float32Array(BUFFER_SAMPLES);
       this.latencyBufferWrite = 0;
@@ -599,7 +620,7 @@ export class VoiceClient {
         this.latencyBufferFilled = Math.min(this.latencyBufferFilled + ref.length, size);
 
         const now = performance.now();
-        if (this.latencyBufferFilled >= size && now - this.latencyLastUpdate > 2000) {
+        if (this.latencyBufferFilled >= size && now - this.latencyLastUpdate > 1000) {
           this.latencyLastUpdate = now;
           queueMicrotask(() => this.runLatencyCorrelation());
         }
@@ -608,7 +629,7 @@ export class VoiceClient {
       this.latencyMeasurerNodes = [merger, proc, silent];
     } catch {
       // If the measurer fails to install, mix-minus still runs at the
-      // seeded delay; cancellation is just less precise.
+      // seeded delay and unity scale; cancellation is just less precise.
     }
   }
 
@@ -617,12 +638,14 @@ export class VoiceClient {
     const ref = this.latencyRefBuffer;
     const cap = this.latencyCapBuffer;
     const delayNode = this.mixMinusDelay;
-    if (!ctx || !ref || !cap || !delayNode) return;
+    const inverter = this.mixMinusInverter;
+    if (!ctx || !ref || !cap || !delayNode || !inverter) return;
     const size = ref.length;
     const sr = ctx.sampleRate;
     const write = this.latencyBufferWrite;
 
-    // Linearize the ring buffers so array indexing matches time order.
+    // Linearize the ring buffers so array indexing matches time order
+    // (oldest at [0], newest at [size-1]).
     const lin = (src: Float32Array) => {
       const out = new Float32Array(size);
       const tailLen = size - write;
@@ -633,30 +656,38 @@ export class VoiceClient {
     const refLin = lin(ref);
     const capLin = lin(cap);
 
-    // Gate on reference energy — correlating silence produces random peaks.
-    const gateWin = Math.min(size, Math.round(0.1 * sr));
-    let rmsSq = 0;
-    for (let i = size - gateWin; i < size; i++) rmsSq += refLin[i] * refLin[i];
-    const rms = Math.sqrt(rmsSq / gateWin);
-    if (rms < 0.005) return;
-
-    // 100ms correlation window against lags from 0 to 300ms. Capture is
-    // always delayed vs reference, so we only search in the positive-lag
-    // direction.
+    // Model: cap[k] ≈ scale * ref[k - D_samples]. Correlate the RECENT
+    // capture window against PAST reference windows — peak lag is D.
+    // (The previous implementation searched ref's future against cap,
+    // which produced a negative-lag peak invisible to this search
+    // direction. That made the estimator noise-driven.)
+    // Search up to 400ms — covers wired (~10ms), USB DACs (~50ms), and
+    // Bluetooth (~250ms) with margin. Going further doubles main-thread cost.
     const winSize = Math.round(0.1 * sr);
-    const winStart = size - winSize;
+    const capWinStart = size - winSize;
     const minLag = 0;
-    const maxLag = Math.min(winStart, Math.round(0.3 * sr));
+    const maxLag = Math.min(capWinStart, Math.round(0.4 * sr));
+
+    // Gate on capture energy — correlating silence produces random peaks.
+    // Capture (not ref) is the "source of truth" for whether there's
+    // anything worth aligning to right now.
+    let capRmsSq = 0;
+    for (let j = 0; j < winSize; j++) {
+      const c = capLin[capWinStart + j];
+      capRmsSq += c * c;
+    }
+    const capRms = Math.sqrt(capRmsSq / winSize);
+    if (capRms < 0.003) return;
 
     let bestLag = minLag;
     let bestCorr = -Infinity;
     let sumAbsCorr = 0;
     let samples = 0;
     for (let lag = minLag; lag <= maxLag; lag++) {
-      const capStart = winStart - lag;
+      const refStart = capWinStart - lag;
       let sum = 0;
       for (let j = 0; j < winSize; j++) {
-        sum += refLin[winStart + j] * capLin[capStart + j];
+        sum += refLin[refStart + j] * capLin[capWinStart + j];
       }
       sumAbsCorr += Math.abs(sum);
       samples++;
@@ -667,17 +698,34 @@ export class VoiceClient {
     }
 
     // Require the peak to stand clearly above the average absolute
-    // correlation — otherwise we're fitting to noise and would jitter the
-    // delay for no gain.
+    // correlation — otherwise we're fitting to noise.
     const meanAbs = samples > 0 ? sumAbsCorr / samples : 0;
-    if (bestCorr < meanAbs * 4) return;
+    if (bestCorr <= 0 || bestCorr < meanAbs * 4) return;
+
+    // Least-squares optimal gain ratio at the best lag:
+    //   scale = <ref_aligned, cap> / <ref_aligned, ref_aligned>
+    // This absorbs OS volume, per-app volume, and any fixed gain in the
+    // loopback path that makes the inverter's naive -1 wrong.
+    const refStart = capWinStart - bestLag;
+    let refDotCap = 0;
+    let refDotRef = 0;
+    for (let j = 0; j < winSize; j++) {
+      const r = refLin[refStart + j];
+      const c = capLin[capWinStart + j];
+      refDotCap += r * c;
+      refDotRef += r * r;
+    }
+    if (refDotRef < 1e-6) return;
+    const scale = Math.max(0.1, Math.min(5, refDotCap / refDotRef));
 
     const measuredSec = bestLag / sr;
     try {
+      // Smooth ramps: delay change could cause pitch wobble; scale change
+      // could click. 250ms time constant, ~1s effective settle time.
       delayNode.delayTime.cancelScheduledValues(ctx.currentTime);
-      // Smooth ramp so the delay change doesn't introduce an audible pitch
-      // wobble in whatever voice-mix content is currently being subtracted.
       delayNode.delayTime.setTargetAtTime(measuredSec, ctx.currentTime, 0.25);
+      inverter.gain.cancelScheduledValues(ctx.currentTime);
+      inverter.gain.setTargetAtTime(-scale, ctx.currentTime, 0.25);
     } catch {}
   }
 
@@ -690,6 +738,7 @@ export class VoiceClient {
     }
     this.latencyMeasurerNodes = [];
     this.mixMinusDelay = null;
+    this.mixMinusInverter = null;
     this.latencyRefBuffer = null;
     this.latencyCapBuffer = null;
     this.latencyBufferWrite = 0;
@@ -953,8 +1002,24 @@ export class VoiceClient {
     // screen-share audio. See `voiceMixDest` for the tap point.
     const audioTrack = this.screenStream.getAudioTracks()[0];
     if (audioTrack) {
-      const outgoingTrack = this.buildMixMinusTrack(audioTrack) ?? audioTrack;
-      this.screenAudioProducer = await this.sendTransport.produce({ track: outgoingTrack, appData: { source: 'screen-audio' } });
+      // If mix-minus graph can't be built (Safari, audio context closed),
+      // skip producing screen audio rather than sending uncancelled loopback.
+      // The uncancelled fallback guarantees peers hear themselves.
+      const outgoingTrack = this.buildMixMinusTrack(audioTrack);
+      if (outgoingTrack) {
+        // Screen audio is typically music/game audio — opposite profile to mic.
+        // Stereo on, DTX off (continuous content), higher bitrate for fidelity.
+        this.screenAudioProducer = await this.sendTransport.produce({
+          track: outgoingTrack,
+          appData: { source: 'screen-audio' },
+          codecOptions: {
+            opusStereo: true,
+            opusDtx: false,
+            opusFec: true,
+            opusMaxAverageBitrate: 128000,
+          },
+        });
+      }
     }
 
     if (this.localUsername) {
@@ -999,32 +1064,18 @@ export class VoiceClient {
     this.screenStream?.getTracks().forEach((t) => t.stop());
     this.screenStream = null;
 
-    // Notify React to clear all video tracks
-    for (const producerId of this.videoProducerIds) {
+    // Notify React to clear every remote track in one pass over producerSources.
+    for (const [producerId, source] of this.producerSources) {
       const username = this.producerUsernames.get(producerId);
-      if (username) this.handlers.onVideoTrack(username, null);
+      if (!username) continue;
+      if (source === 'camera') this.handlers.onVideoTrack(username, null);
+      else if (source === 'screen') this.handlers.onScreenTrack(username, null);
+      else if (source === 'screen-audio') this.handlers.onScreenAudioChange(username, false);
     }
-    if (this.localUsername && this.videoProducer) {
-      this.handlers.onVideoTrack(this.localUsername, null);
+    if (this.localUsername) {
+      if (this.videoProducer) this.handlers.onVideoTrack(this.localUsername, null);
+      if (this.screenProducer) this.handlers.onScreenTrack(this.localUsername, null);
     }
-    this.videoProducerIds.clear();
-
-    // Notify React to clear all screen tracks
-    for (const producerId of this.screenProducerIds) {
-      const username = this.producerUsernames.get(producerId);
-      if (username) this.handlers.onScreenTrack(username, null);
-    }
-    if (this.localUsername && this.screenProducer) {
-      this.handlers.onScreenTrack(this.localUsername, null);
-    }
-    this.screenProducerIds.clear();
-
-    // Clean up screen audio
-    for (const producerId of this.screenAudioProducerIds) {
-      const username = this.producerUsernames.get(producerId);
-      if (username) this.handlers.onScreenAudioChange(username, false);
-    }
-    this.screenAudioProducerIds.clear();
     this.screenAudioElements.forEach((a) => { a.srcObject = null; });
     this.screenAudioElements.clear();
     this.producerSources.clear();
@@ -1109,7 +1160,14 @@ export class VoiceClient {
     // Release the old mic hardware before grabbing the new one
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.rawMicStream = await navigator.mediaDevices.getUserMedia({
-      audio: { ...(deviceId && { deviceId: { exact: deviceId } }), autoGainControl: false },
+      audio: {
+        ...(deviceId && { deviceId: { exact: deviceId } }),
+        autoGainControl: false,
+        echoCancellation: true,
+        noiseSuppression: true,
+        channelCount: 1,
+        sampleRate: 48000,
+      },
     });
     const gatedTrack = this.buildMicGraph(this.rawMicStream);
     await this.audioProducer.replaceTrack({ track: gatedTrack });

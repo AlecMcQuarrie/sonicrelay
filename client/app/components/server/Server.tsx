@@ -478,14 +478,13 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
             if (current.includes(user)) return prev;
             return { ...prev, [channelId]: [...current, user] };
           });
-          // Apply saved volume/mute settings once audio element is ready
-          setTimeout(() => {
-            const s = voicePeerSettingsRef.current[user];
-            if (s) {
-              voiceRef.current?.setUserVolume(user, s.volume);
-              voiceRef.current?.setUserMuted(user, s.muted);
-            }
-          }, 500);
+          // Record the saved base volume/mute immediately; VoiceClient stores it
+          // and re-applies when the consumer/gain node is actually created.
+          const s = voicePeerSettingsRef.current[user];
+          if (s) {
+            voiceRef.current?.setUserVolume(user, s.volume);
+            voiceRef.current?.setUserMuted(user, s.muted);
+          }
         },
         onPeerLeft: (channelId, user) => {
           setVoicePeers((prev) => ({
@@ -553,13 +552,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
             return next;
           });
           if (available) {
-            setTimeout(() => {
-              const s = screenAudioPeerSettingsRef.current[user];
-              if (s) {
-                voiceRef.current?.setScreenAudioVolume(user, s.volume);
-                voiceRef.current?.setScreenAudioMuted(user, s.muted);
-              }
-            }, 500);
+            const s = screenAudioPeerSettingsRef.current[user];
+            if (s) {
+              voiceRef.current?.setScreenAudioVolume(user, s.volume);
+              voiceRef.current?.setScreenAudioMuted(user, s.muted);
+            }
           }
         },
       });
@@ -634,13 +631,12 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     wsRef.current?.send(JSON.stringify({ type: 'mute-state', muted: wasMuted }));
     wsRef.current?.send(JSON.stringify({ type: 'deafen-state', deafened: wasDeafened }));
 
-    // Apply saved volume/mute settings for existing peers
-    setTimeout(() => {
-      for (const [user, s] of Object.entries(voicePeerSettingsRef.current)) {
-        voiceRef.current?.setUserVolume(user, s.volume);
-        voiceRef.current?.setUserMuted(user, s.muted);
-      }
-    }, 500);
+    // Record saved volume/mute for every existing peer; VoiceClient stores
+    // the base value and applies it the moment each consumer's gain node exists.
+    for (const [user, s] of Object.entries(voicePeerSettingsRef.current)) {
+      voiceRef.current?.setUserVolume(user, s.volume);
+      voiceRef.current?.setUserMuted(user, s.muted);
+    }
   }, [voiceChannelId, username, claimVoice, serverId]);
 
   const leaveVoiceChannel = useCallback(async () => {

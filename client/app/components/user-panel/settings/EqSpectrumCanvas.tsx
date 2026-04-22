@@ -43,7 +43,10 @@ export default function EqSpectrumCanvas({ deviceId, bands, enabled }: EqSpectru
     let animId: number | null = null;
 
     navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : { autoGainControl: false },
+      audio: {
+        ...(deviceId && { deviceId: { exact: deviceId } }),
+        autoGainControl: false,
+      },
     }).then((s) => {
       if (cancelled) { s.getTracks().forEach((t) => t.stop()); return; }
       stream = s;
