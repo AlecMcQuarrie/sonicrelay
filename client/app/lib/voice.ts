@@ -538,9 +538,20 @@ class NlmsAec extends AudioWorkletProcessor {
     this.buf = new Float32Array(N);
     this.w = new Float32Array(N);
     this.widx = 0;
-    this.energy = 0;
-    this.mu = 0.2;
+    this.refEnergy = 0;
+    this.mu = 0.15;
     this.eps = 1e-6;
+    // Weight leakage per sample. Prevents unbounded growth when the
+    // filter sees signal it can't explain (game audio, mic bleed, etc.).
+    // 1 - 1e-5 → weights decay to half over ~70k samples (~1.5s) if the
+    // reference ever goes fully silent or uncorrelated with capture.
+    this.leak = 1 - 1e-5;
+    // Reference energy threshold below which we freeze adaptation.
+    // Without this, NLMS tries to fit uncorrelated capture to residual
+    // reference noise — weights grow and the "cancelled" output ends up
+    // amplifying game audio to painful levels. Units: sum-of-squares
+    // across the N-sample buffer. N * 1e-5 → ~ -40 dBFS.
+    this.refThresh = N * 1e-5;
   }
   process(inputs, outputs) {
     const ref = inputs[0] && inputs[0][0];
@@ -549,36 +560,64 @@ class NlmsAec extends AudioWorkletProcessor {
     if (!out) return true;
     const len = out.length;
     if (!cap) { for (let i = 0; i < len; i++) out[i] = 0; return true; }
+    // No reference available: pass capture through untouched. Never amplify.
     if (!ref) { for (let i = 0; i < len; i++) out[i] = cap[i]; return true; }
     const N = this.N;
     const buf = this.buf;
     const w = this.w;
     let widx = this.widx;
-    let energy = this.energy;
+    let refE = this.refEnergy;
+    const leak = this.leak;
+    const thresh = this.refThresh;
+    const mu = this.mu;
+    const eps = this.eps;
+
     for (let n = 0; n < len; n++) {
       const x = ref[n];
-      const old = buf[widx];
-      energy += x * x - old * old;
-      if (energy < 0) energy = 0;
+      const oldX = buf[widx];
+      refE += x * x - oldX * oldX;
+      if (refE < 0) refE = 0;
       buf[widx] = x;
+
+      // FIR: y = sum(w[i] * buf[widx - i])
       let y = 0;
       let j = widx;
       for (let i = 0; i < N; i++) {
         y += w[i] * buf[j];
         j = (j === 0) ? N - 1 : j - 1;
       }
-      const e = cap[n] - y;
+
+      const c = cap[n];
+      let e = c - y;
+
+      // Divergence guard. If the filter predicts something much larger
+      // than capture, the cancelled signal becomes louder than the
+      // original — painful for viewers. Clamp to capture in that case
+      // and let leakage bleed the offending weights down.
+      if (Math.abs(e) > 2 * Math.abs(c) + 0.02) e = c;
       out[n] = e;
-      const step = this.mu / (energy + this.eps);
-      j = widx;
-      for (let i = 0; i < N; i++) {
-        w[i] += step * e * buf[j];
-        j = (j === 0) ? N - 1 : j - 1;
+
+      // Adapt weights only when the reference is non-trivial. Freezing
+      // during double-talk / reference silence is what prevents the
+      // amplify-random-audio failure mode.
+      if (refE > thresh) {
+        const step = mu / (refE + eps);
+        j = widx;
+        for (let i = 0; i < N; i++) {
+          w[i] = leak * w[i] + step * e * buf[j];
+          j = (j === 0) ? N - 1 : j - 1;
+        }
+      } else {
+        // Reference quiet — leak weights toward zero so a stale learned
+        // filter doesn't keep colouring the capture after peers stopped.
+        for (let i = 0; i < N; i++) w[i] *= leak;
       }
+
       widx = (widx + 1) % N;
     }
+
     this.widx = widx;
-    this.energy = energy;
+    this.refEnergy = refE;
     return true;
   }
 }
