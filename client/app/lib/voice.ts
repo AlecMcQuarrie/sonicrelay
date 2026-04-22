@@ -127,27 +127,13 @@ export class VoiceClient {
   private makeupGainNode: GainNode | null = null;
   private masterGainNode: GainNode | null = null;
   // Tap off the peer-voice mix (post-master, same signal the speakers play)
-  // so startScreenShare can phase-invert it against the system loopback
-  // capture — cancels our own received voices out of the outgoing screen
-  // audio so viewers don't hear themselves. See startScreenShare().
+  // so startScreenShare can cancel it out of the system loopback capture —
+  // viewers don't hear themselves echoed through the shared screen audio.
+  // See buildAecTrack() for the NLMS filter that does the actual cancellation.
   private voiceMixDest: MediaStreamAudioDestinationNode | null = null;
-  private mixMinusNodes: AudioNode[] = [];
-  private mixMinusStream: MediaStream | null = null;
-  private mixMinusDelay: DelayNode | null = null;
-  // Inverter gain — adaptively tuned to match the loopback-vs-reference
-  // level ratio. Starts at -1, refined by the latency measurer to the
-  // least-squares scale that minimizes residual. Matters because the
-  // loopback path goes through OS/app volume, which is rarely unity.
-  private mixMinusInverter: GainNode | null = null;
-  // Passive latency + scale measurer: cross-correlates the peer-voice
-  // reference against the loopback capture to find the delay AND the gain
-  // ratio that best cancels the reference out of the capture. No probe.
-  private latencyMeasurerNodes: AudioNode[] = [];
-  private latencyRefBuffer: Float32Array | null = null;
-  private latencyCapBuffer: Float32Array | null = null;
-  private latencyBufferWrite = 0;
-  private latencyBufferFilled = 0;
-  private latencyLastUpdate = 0;
+  private aecWorkletPromise: Promise<void> | null = null;
+  private aecNodes: AudioNode[] = [];
+  private aecStream: MediaStream | null = null;
   private normalizeVoices = true;
   private eqEnabled = false;
   private eqBands: { gain: number; q: number }[] = EQ_FREQS.map(() => ({ gain: 0, q: 1 }));
@@ -527,224 +513,128 @@ export class VoiceClient {
     this.producerSources.delete(producerId);
   }
 
-  // Mix-minus: outgoing screen audio = loopback capture - scale * delayed(peer voice mix).
-  // Phase-invert the peer-voice tap, delay it to match the loopback round-trip,
-  // and scale it to match the loopback gain. Both `delay` and `scale` are
-  // estimated live by cross-correlating reference against capture. Residual =
-  // game/app audio minus the peers we're playing.
-  private buildMixMinusTrack(loopbackTrack: MediaStreamTrack): MediaStreamTrack | null {
+  // NLMS adaptive filter in an AudioWorklet. Reference = peer voice mix
+  // (pre-speaker, same signal we play). Capture = system loopback track
+  // from getDisplayMedia. The filter learns the full impulse response
+  // (delay + per-app volume + any frequency shaping) from reference to
+  // capture, and emits capture − filtered(reference). Handles what the
+  // old single-tap "delay + invert + scale" approach couldn't: loopback
+  // paths with non-trivial frequency response, and the slow/unreliable
+  // convergence of a cross-correlation latency seeker.
+  //
+  // 1024 taps at 48kHz = ~21ms of impulse response, which covers typical
+  // WASAPI loopback latency with headroom. Bluetooth (100–250ms) won't be
+  // fully cancelled, but residual is still reduced.
+  //
+  // Runs inside AudioWorkletGlobalScope — no closures over outer scope,
+  // no imports. If any of that changes, the source must remain a plain
+  // string because AudioWorklet modules load as separate scripts.
+  private static readonly AEC_WORKLET_SOURCE = `
+class NlmsAec extends AudioWorkletProcessor {
+  constructor(opts) {
+    super();
+    const N = (opts && opts.processorOptions && opts.processorOptions.N) || 1024;
+    this.N = N;
+    this.buf = new Float32Array(N);
+    this.w = new Float32Array(N);
+    this.widx = 0;
+    this.energy = 0;
+    this.mu = 0.2;
+    this.eps = 1e-6;
+  }
+  process(inputs, outputs) {
+    const ref = inputs[0] && inputs[0][0];
+    const cap = inputs[1] && inputs[1][0];
+    const out = outputs[0] && outputs[0][0];
+    if (!out) return true;
+    const len = out.length;
+    if (!cap) { for (let i = 0; i < len; i++) out[i] = 0; return true; }
+    if (!ref) { for (let i = 0; i < len; i++) out[i] = cap[i]; return true; }
+    const N = this.N;
+    const buf = this.buf;
+    const w = this.w;
+    let widx = this.widx;
+    let energy = this.energy;
+    for (let n = 0; n < len; n++) {
+      const x = ref[n];
+      const old = buf[widx];
+      energy += x * x - old * old;
+      if (energy < 0) energy = 0;
+      buf[widx] = x;
+      let y = 0;
+      let j = widx;
+      for (let i = 0; i < N; i++) {
+        y += w[i] * buf[j];
+        j = (j === 0) ? N - 1 : j - 1;
+      }
+      const e = cap[n] - y;
+      out[n] = e;
+      const step = this.mu / (energy + this.eps);
+      j = widx;
+      for (let i = 0; i < N; i++) {
+        w[i] += step * e * buf[j];
+        j = (j === 0) ? N - 1 : j - 1;
+      }
+      widx = (widx + 1) % N;
+    }
+    this.widx = widx;
+    this.energy = energy;
+    return true;
+  }
+}
+registerProcessor('nlms-aec', NlmsAec);
+`;
+
+  // Worklet registration is async and required before the AudioWorkletNode
+  // can be constructed. Cached on first build so subsequent screen shares
+  // don't re-register.
+  private ensureAecWorklet(): Promise<void> {
+    if (this.aecWorkletPromise) return this.aecWorkletPromise;
+    const ctx = this.audioContext;
+    if (!ctx) return Promise.reject(new Error('AudioContext not initialized'));
+    const blob = new Blob([VoiceClient.AEC_WORKLET_SOURCE], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    this.aecWorkletPromise = ctx.audioWorklet.addModule(url).finally(() => {
+      URL.revokeObjectURL(url);
+    });
+    return this.aecWorkletPromise;
+  }
+
+  private async buildAecTrack(loopbackTrack: MediaStreamTrack): Promise<MediaStreamTrack | null> {
     const ctx = this.audioContext;
     const voiceMix = this.voiceMixDest;
     if (!ctx || !voiceMix) return null;
     try {
-      this.tearDownMixMinus();
-      const loopbackStream = new MediaStream([loopbackTrack]);
-      const loopbackSource = ctx.createMediaStreamSource(loopbackStream);
+      await this.ensureAecWorklet();
+      this.tearDownAec();
+      const loopbackSource = ctx.createMediaStreamSource(new MediaStream([loopbackTrack]));
       const voiceSource = ctx.createMediaStreamSource(voiceMix.stream);
-      const delay = ctx.createDelay(1);
-      const reportedLatency = (ctx as any).outputLatency;
-      const initial = typeof reportedLatency === 'number' && reportedLatency > 0
-        ? Math.max(0.02, Math.min(0.3, reportedLatency * 2))
-        : 0.06;
-      delay.delayTime.value = initial;
-      const inverter = ctx.createGain();
-      inverter.gain.value = -1;
-      const summer = ctx.createGain();
-      summer.gain.value = 1;
+      const aec = new AudioWorkletNode(ctx, 'nlms-aec', {
+        numberOfInputs: 2,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: { N: 1024 },
+      });
       const dest = ctx.createMediaStreamDestination();
-      loopbackSource.connect(summer);
-      voiceSource.connect(delay).connect(inverter).connect(summer);
-      summer.connect(dest);
+      voiceSource.connect(aec, 0, 0);
+      loopbackSource.connect(aec, 0, 1);
+      aec.connect(dest);
       const outTrack = dest.stream.getAudioTracks()[0];
       if (!outTrack) return null;
-      this.mixMinusDelay = delay;
-      this.mixMinusInverter = inverter;
-      this.mixMinusNodes = [loopbackSource, voiceSource, delay, inverter, summer, dest];
-      this.mixMinusStream = dest.stream;
-      this.installLatencyMeasurer(voiceSource, loopbackSource);
+      this.aecNodes = [loopbackSource, voiceSource, aec, dest];
+      this.aecStream = dest.stream;
       return outTrack;
     } catch {
-      this.tearDownMixMinus();
+      this.tearDownAec();
       return null;
     }
   }
 
-  // Taps the same voice-mix reference and loopback streams the mix-minus
-  // uses, copies them into ring buffers via a ScriptProcessorNode, and
-  // periodically cross-correlates to find delay + scale.
-  private installLatencyMeasurer(voiceSource: AudioNode, loopbackSource: AudioNode) {
-    const ctx = this.audioContext;
-    if (!ctx) return;
-    try {
-      // 800ms window — long enough to search up to ~600ms of lag (covers
-      // Bluetooth and virtual audio devices) while keeping correlation cost
-      // reasonable on the main thread.
-      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.8);
-      this.latencyRefBuffer = new Float32Array(BUFFER_SAMPLES);
-      this.latencyCapBuffer = new Float32Array(BUFFER_SAMPLES);
-      this.latencyBufferWrite = 0;
-      this.latencyBufferFilled = 0;
-      this.latencyLastUpdate = 0;
-
-      // Merge ref + capture into a single 2-channel stream so one
-      // ScriptProcessor can see both with aligned timing.
-      const merger = ctx.createChannelMerger(2);
-      voiceSource.connect(merger, 0, 0);
-      loopbackSource.connect(merger, 0, 1);
-      // ScriptProcessor is deprecated but universally supported in Electron
-      // and avoids the overhead of loading an AudioWorklet module. The work
-      // on the audio thread is trivial (ring-buffer copy); correlation runs
-      // on the main thread via queueMicrotask.
-      const proc = ctx.createScriptProcessor(4096, 2, 1);
-      merger.connect(proc);
-      const silent = ctx.createGain();
-      silent.gain.value = 0;
-      proc.connect(silent);
-      silent.connect(ctx.destination);
-
-      proc.onaudioprocess = (event) => {
-        const ref = event.inputBuffer.getChannelData(0);
-        const cap = event.inputBuffer.getChannelData(1);
-        const refBuf = this.latencyRefBuffer;
-        const capBuf = this.latencyCapBuffer;
-        if (!refBuf || !capBuf) return;
-        const size = refBuf.length;
-        let w = this.latencyBufferWrite;
-        for (let i = 0; i < ref.length; i++) {
-          refBuf[w] = ref[i];
-          capBuf[w] = cap[i];
-          w = w + 1;
-          if (w >= size) w = 0;
-        }
-        this.latencyBufferWrite = w;
-        this.latencyBufferFilled = Math.min(this.latencyBufferFilled + ref.length, size);
-
-        const now = performance.now();
-        if (this.latencyBufferFilled >= size && now - this.latencyLastUpdate > 1000) {
-          this.latencyLastUpdate = now;
-          queueMicrotask(() => this.runLatencyCorrelation());
-        }
-      };
-
-      this.latencyMeasurerNodes = [merger, proc, silent];
-    } catch {
-      // If the measurer fails to install, mix-minus still runs at the
-      // seeded delay and unity scale; cancellation is just less precise.
-    }
-  }
-
-  private runLatencyCorrelation() {
-    const ctx = this.audioContext;
-    const ref = this.latencyRefBuffer;
-    const cap = this.latencyCapBuffer;
-    const delayNode = this.mixMinusDelay;
-    const inverter = this.mixMinusInverter;
-    if (!ctx || !ref || !cap || !delayNode || !inverter) return;
-    const size = ref.length;
-    const sr = ctx.sampleRate;
-    const write = this.latencyBufferWrite;
-
-    // Linearize the ring buffers so array indexing matches time order
-    // (oldest at [0], newest at [size-1]).
-    const lin = (src: Float32Array) => {
-      const out = new Float32Array(size);
-      const tailLen = size - write;
-      out.set(src.subarray(write), 0);
-      out.set(src.subarray(0, write), tailLen);
-      return out;
-    };
-    const refLin = lin(ref);
-    const capLin = lin(cap);
-
-    // Model: cap[k] ≈ scale * ref[k - D_samples]. Correlate the RECENT
-    // capture window against PAST reference windows — peak lag is D.
-    // (The previous implementation searched ref's future against cap,
-    // which produced a negative-lag peak invisible to this search
-    // direction. That made the estimator noise-driven.)
-    // Search up to 400ms — covers wired (~10ms), USB DACs (~50ms), and
-    // Bluetooth (~250ms) with margin. Going further doubles main-thread cost.
-    const winSize = Math.round(0.1 * sr);
-    const capWinStart = size - winSize;
-    const minLag = 0;
-    const maxLag = Math.min(capWinStart, Math.round(0.4 * sr));
-
-    // Gate on capture energy — correlating silence produces random peaks.
-    // Capture (not ref) is the "source of truth" for whether there's
-    // anything worth aligning to right now.
-    let capRmsSq = 0;
-    for (let j = 0; j < winSize; j++) {
-      const c = capLin[capWinStart + j];
-      capRmsSq += c * c;
-    }
-    const capRms = Math.sqrt(capRmsSq / winSize);
-    if (capRms < 0.003) return;
-
-    let bestLag = minLag;
-    let bestCorr = -Infinity;
-    let sumAbsCorr = 0;
-    let samples = 0;
-    for (let lag = minLag; lag <= maxLag; lag++) {
-      const refStart = capWinStart - lag;
-      let sum = 0;
-      for (let j = 0; j < winSize; j++) {
-        sum += refLin[refStart + j] * capLin[capWinStart + j];
-      }
-      sumAbsCorr += Math.abs(sum);
-      samples++;
-      if (sum > bestCorr) {
-        bestCorr = sum;
-        bestLag = lag;
-      }
-    }
-
-    // Require the peak to stand clearly above the average absolute
-    // correlation — otherwise we're fitting to noise.
-    const meanAbs = samples > 0 ? sumAbsCorr / samples : 0;
-    if (bestCorr <= 0 || bestCorr < meanAbs * 4) return;
-
-    // Least-squares optimal gain ratio at the best lag:
-    //   scale = <ref_aligned, cap> / <ref_aligned, ref_aligned>
-    // This absorbs OS volume, per-app volume, and any fixed gain in the
-    // loopback path that makes the inverter's naive -1 wrong.
-    const refStart = capWinStart - bestLag;
-    let refDotCap = 0;
-    let refDotRef = 0;
-    for (let j = 0; j < winSize; j++) {
-      const r = refLin[refStart + j];
-      const c = capLin[capWinStart + j];
-      refDotCap += r * c;
-      refDotRef += r * r;
-    }
-    if (refDotRef < 1e-6) return;
-    const scale = Math.max(0.1, Math.min(5, refDotCap / refDotRef));
-
-    const measuredSec = bestLag / sr;
-    try {
-      // Smooth ramps: delay change could cause pitch wobble; scale change
-      // could click. 250ms time constant, ~1s effective settle time.
-      delayNode.delayTime.cancelScheduledValues(ctx.currentTime);
-      delayNode.delayTime.setTargetAtTime(measuredSec, ctx.currentTime, 0.25);
-      inverter.gain.cancelScheduledValues(ctx.currentTime);
-      inverter.gain.setTargetAtTime(-scale, ctx.currentTime, 0.25);
-    } catch {}
-  }
-
-  private tearDownMixMinus() {
-    for (const n of this.mixMinusNodes) { try { n.disconnect(); } catch {} }
-    this.mixMinusNodes = [];
-    for (const n of this.latencyMeasurerNodes) {
-      try { (n as ScriptProcessorNode).onaudioprocess = null as any; } catch {}
-      try { n.disconnect(); } catch {}
-    }
-    this.latencyMeasurerNodes = [];
-    this.mixMinusDelay = null;
-    this.mixMinusInverter = null;
-    this.latencyRefBuffer = null;
-    this.latencyCapBuffer = null;
-    this.latencyBufferWrite = 0;
-    this.latencyBufferFilled = 0;
-    this.mixMinusStream?.getTracks().forEach((t) => t.stop());
-    this.mixMinusStream = null;
+  private tearDownAec() {
+    for (const n of this.aecNodes) { try { n.disconnect(); } catch {} }
+    this.aecNodes = [];
+    this.aecStream?.getTracks().forEach((t) => t.stop());
+    this.aecStream = null;
   }
 
   private buildMicGraph(stream: MediaStream): MediaStreamTrack {
@@ -997,15 +887,16 @@ export class VoiceClient {
     });
 
     // Produce screen audio if the user shared a tab/window with audio.
-    // Run it through a mix-minus graph that subtracts our own received peer
-    // voices from the loopback so viewers don't hear themselves in the
-    // screen-share audio. See `voiceMixDest` for the tap point.
+    // Run it through an NLMS adaptive filter that cancels our own received
+    // peer voices out of the loopback so viewers don't hear themselves in
+    // the screen-share audio. See `voiceMixDest` for the tap point.
     const audioTrack = this.screenStream.getAudioTracks()[0];
     if (audioTrack) {
-      // If mix-minus graph can't be built (Safari, audio context closed),
-      // skip producing screen audio rather than sending uncancelled loopback.
-      // The uncancelled fallback guarantees peers hear themselves.
-      const outgoingTrack = this.buildMixMinusTrack(audioTrack);
+      // If AEC graph can't be built (no AudioWorklet support, audio context
+      // closed), skip producing screen audio rather than sending raw
+      // uncancelled loopback — the raw fallback guarantees peers hear
+      // themselves.
+      const outgoingTrack = await this.buildAecTrack(audioTrack);
       if (outgoingTrack) {
         // Screen audio is typically music/game audio — opposite profile to mic.
         // Stereo on, DTX off (continuous content), higher bitrate for fidelity.
@@ -1048,7 +939,7 @@ export class VoiceClient {
 
     this.screenStream?.getTracks().forEach((t) => t.stop());
     this.screenStream = null;
-    this.tearDownMixMinus();
+    this.tearDownAec();
 
     if (this.localUsername) {
       this.handlers.onScreenTrack(this.localUsername, null);
@@ -1098,7 +989,8 @@ export class VoiceClient {
     this.trackPumpers.clear();
     this.userBaseVolumes.clear();
     this.userMutedState.clear();
-    this.tearDownMixMinus();
+    this.tearDownAec();
+    this.aecWorkletPromise = null;
     this.voiceMixDest?.disconnect();
     this.voiceMixDest = null;
     this.compressorNode?.disconnect();
