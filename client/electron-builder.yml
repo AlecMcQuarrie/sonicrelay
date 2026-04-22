@@ -69,6 +69,26 @@ files:
   - "node_modules/buffer/**/*"
   - "node_modules/centra/**/*"
   - "node_modules/clipboardy/**/*"
+  # Nested node_modules — electron-builder prunes them unless listed
+  # explicitly, even though the parent glob above would match. Each entry
+  # here exists because its parent package pins a specific version that
+  # differs from the top-level copy (e.g., clipboardy pins execa@1 while
+  # other packages use newer majors; isomorphic-fetch pins node-fetch@2
+  # while top-level is v3).
+  - "node_modules/clipboardy/node_modules/cross-spawn/**/*"
+  - "node_modules/clipboardy/node_modules/execa/**/*"
+  - "node_modules/clipboardy/node_modules/get-stream/**/*"
+  - "node_modules/clipboardy/node_modules/is-docker/**/*"
+  - "node_modules/clipboardy/node_modules/is-stream/**/*"
+  - "node_modules/clipboardy/node_modules/is-wsl/**/*"
+  - "node_modules/clipboardy/node_modules/isexe/**/*"
+  - "node_modules/clipboardy/node_modules/npm-run-path/**/*"
+  - "node_modules/clipboardy/node_modules/path-key/**/*"
+  - "node_modules/clipboardy/node_modules/semver/**/*"
+  - "node_modules/clipboardy/node_modules/shebang-command/**/*"
+  - "node_modules/clipboardy/node_modules/shebang-regex/**/*"
+  - "node_modules/clipboardy/node_modules/signal-exit/**/*"
+  - "node_modules/clipboardy/node_modules/which/**/*"
   - "node_modules/dom-walk/**/*"
   - "node_modules/end-of-stream/**/*"
   - "node_modules/event-target-shim/**/*"
@@ -81,8 +101,10 @@ files:
   - "node_modules/global/**/*"
   - "node_modules/ieee754/**/*"
   - "node_modules/image-q/**/*"
+  - "node_modules/image-q/node_modules/@types/node/**/*"
   - "node_modules/is-function/**/*"
   - "node_modules/isomorphic-fetch/**/*"
+  - "node_modules/isomorphic-fetch/node_modules/node-fetch/**/*"
   - "node_modules/jimp/**/*"
   - "node_modules/jpeg-js/**/*"
   - "node_modules/load-bmfont/**/*"
@@ -101,10 +123,13 @@ files:
   - "node_modules/peek-readable/**/*"
   - "node_modules/phin/**/*"
   - "node_modules/pixelmatch/**/*"
+  - "node_modules/pixelmatch/node_modules/pngjs/**/*"
   - "node_modules/pngjs/**/*"
   - "node_modules/process/**/*"
   - "node_modules/pump/**/*"
   - "node_modules/readable-web-to-node-stream/**/*"
+  - "node_modules/readable-web-to-node-stream/node_modules/buffer/**/*"
+  - "node_modules/readable-web-to-node-stream/node_modules/readable-stream/**/*"
   - "node_modules/regenerator-runtime/**/*"
   - "node_modules/safe-buffer/**/*"
   - "node_modules/sax/**/*"
@@ -123,6 +148,7 @@ files:
   - "node_modules/xhr/**/*"
   - "node_modules/xml-parse-from-string/**/*"
   - "node_modules/xml2js/**/*"
+  - "node_modules/xml2js/node_modules/xmlbuilder/**/*"
   - "node_modules/xtend/**/*"
 asar: false
 npmRebuild: true

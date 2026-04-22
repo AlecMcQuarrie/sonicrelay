@@ -296,13 +296,21 @@ export class VoiceClient {
       // Produce audio from microphone. The raw stream is routed through a
       // Web Audio graph (source → micGain → vadGate → destination) so master
       // volume, VAD, and PTT can be applied before the track reaches mediasoup.
-      // autoGainControl: false — Chromium's AGC silently lowers input gain mid-session on
-      // USB interfaces like the Wave XLR. Let the hardware/mixer software handle levels.
+      //
+      // autoGainControl: false — Chromium's AGC silently lowers input gain
+      //   mid-session on USB interfaces like the Wave XLR.
+      // echoCancellation / noiseSuppression: false — setting either to true
+      //   opens the mic in Windows' "Communications" audio category, which
+      //   triggers the OS-level ducking rule that drops every other app's
+      //   volume (Discord, Spotify, game audio) by up to 80%. Targeted at
+      //   headphone users, for whom speaker-to-mic echo isn't a concern.
+      //   Speaker users may hear echo; they can enable OS-level AEC via
+      //   their audio driver or wear headphones.
       const preferredAudio = localStorage.getItem("preferredAudioDevice");
       const micConstraints = {
         autoGainControl: false,
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: false,
+        noiseSuppression: false,
         channelCount: 1,
         sampleRate: 48000,
       };
@@ -1090,12 +1098,13 @@ registerProcessor('nlms-aec', NlmsAec);
     if (!this.audioProducer || !this.sendTransport) return;
     // Release the old mic hardware before grabbing the new one
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
+    // See join() for why echo / noise flags are disabled (Windows ducking).
     this.rawMicStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         ...(deviceId && { deviceId: { exact: deviceId } }),
         autoGainControl: false,
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: false,
+        noiseSuppression: false,
         channelCount: 1,
         sampleRate: 48000,
       },
