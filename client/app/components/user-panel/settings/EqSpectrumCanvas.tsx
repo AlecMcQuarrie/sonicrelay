@@ -42,10 +42,17 @@ export default function EqSpectrumCanvas({ deviceId, bands, enabled }: EqSpectru
     let ctx: AudioContext | null = null;
     let animId: number | null = null;
 
+    // Must match the primary voice stream's constraints. Opening a second
+    // stream on the same device with echoCancellation / noiseSuppression
+    // defaulting to true forces Chromium into "Communications" mode on
+    // Windows, which overrides the USB interface's own gain setting
+    // (Wave XLR, GoXLR, etc). Keeping all three off matches voice.ts.
     navigator.mediaDevices.getUserMedia({
       audio: {
         ...(deviceId && { deviceId: { exact: deviceId } }),
         autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
       },
     }).then((s) => {
       if (cancelled) { s.getTracks().forEach((t) => t.stop()); return; }

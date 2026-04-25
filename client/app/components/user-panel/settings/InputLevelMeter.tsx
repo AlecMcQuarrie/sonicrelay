@@ -18,8 +18,18 @@ export default function InputLevelMeter({ deviceId, vadMode }: InputLevelMeterPr
     let ctx: AudioContext | null = null;
     let animId: number | null = null;
 
+    // Match the primary voice stream's constraints exactly. If the user is
+    // in a call on this device, opening a second stream with different
+    // flags makes Chromium re-negotiate the device — which flips the OS
+    // into "Communications" mode on Windows and overrides the Wave XLR's
+    // physical gain. Keeping everything off matches voice.ts.
     navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: {
+        ...(deviceId && { deviceId: { exact: deviceId } }),
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
     }).then((s) => {
       if (cancelled) { s.getTracks().forEach((t) => t.stop()); return; }
       stream = s;
