@@ -9,7 +9,7 @@ import type { VoiceClient } from "~/lib/voice";
 import type { UserSettings } from "~/lib/settings";
 
 type Device = { deviceId: string; label: string };
-type VadMode = 'off' | 'auto' | 'manual';
+type VadMode = 'off' | 'auto';
 
 interface VoiceTabProps {
   voiceRef: RefObject<VoiceClient | null>;
@@ -65,11 +65,6 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
     voiceRef.current?.setVadMode(mode);
   };
 
-  const saveVadThreshold = (value: number) => {
-    updateSettings({ vadThreshold: value });
-    voiceRef.current?.setVadThreshold(value);
-  };
-
   const savePttEnabled = (enabled: boolean) => {
     updateSettings({ pttEnabled: enabled });
     voiceRef.current?.setPttEnabled(enabled);
@@ -78,6 +73,11 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
   const saveNormalizeVoices = (enabled: boolean) => {
     updateSettings({ normalizeVoices: enabled });
     voiceRef.current?.setNormalizeVoices(enabled);
+  };
+
+  const saveRnnoiseEnabled = (enabled: boolean) => {
+    updateSettings({ rnnoiseEnabled: enabled });
+    voiceRef.current?.setRnnoiseEnabled(enabled);
   };
 
   const savePttKey = (key: string) => {
@@ -100,11 +100,7 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Input Level</label>
-        <InputLevelMeter
-          deviceId={selectedAudio}
-          vadMode={settings.vadMode}
-          vadThreshold={settings.vadThreshold}
-        />
+        <InputLevelMeter deviceId={selectedAudio} vadMode={settings.vadMode} />
       </div>
 
       <div className="space-y-1.5">
@@ -148,36 +144,26 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Noise suppression</label>
+          <Switch checked={settings.rnnoiseEnabled} onCheckedChange={saveRnnoiseEnabled} />
+        </div>
+        <p className="text-xs text-muted-foreground">Removes keyboard, fan, and room noise from your outgoing voice (RNNoise).</p>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
           <label className="text-sm font-medium">Normalize voices</label>
           <Switch checked={settings.normalizeVoices} onCheckedChange={saveNormalizeVoices} />
         </div>
-        <p className="text-xs text-muted-foreground">Auto-level quiet and loud speakers.</p>
+        <p className="text-xs text-muted-foreground">Per-peer loudness matching so quiet and loud speakers sit at the same level.</p>
       </div>
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Voice Activity</label>
         <RadioGroup value={settings.vadMode} onValueChange={(v) => saveVadMode(v as VadMode)}>
           <RadioGroupItem value="off">Always on</RadioGroupItem>
-          <RadioGroupItem value="auto">Auto</RadioGroupItem>
-          <RadioGroupItem value="manual">Manual</RadioGroupItem>
+          <RadioGroupItem value="auto">Auto (Silero)</RadioGroupItem>
         </RadioGroup>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">VAD Threshold</label>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {settings.vadMode === 'manual' ? Math.round(settings.vadThreshold) : settings.vadMode}
-          </span>
-        </div>
-        <Slider
-          min={0}
-          max={100}
-          step={1}
-          value={[settings.vadThreshold]}
-          disabled={settings.vadMode !== 'manual'}
-          onValueChange={([v]) => saveVadThreshold(v)}
-        />
       </div>
 
       <div className="space-y-1.5">

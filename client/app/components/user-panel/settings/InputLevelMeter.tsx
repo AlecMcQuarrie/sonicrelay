@@ -2,24 +2,17 @@ import { useEffect, useRef } from "react";
 
 interface InputLevelMeterProps {
   deviceId: string;
-  vadMode: 'off' | 'auto' | 'manual';
-  vadThreshold: number;
+  vadMode: 'off' | 'auto';
 }
 
 // Standalone live mic level meter — runs its own AudioContext + analyser
 // against getUserMedia so it works whether or not the user is currently in
-// a voice call. Values are scaled to 0-100 to match the VAD threshold UI.
-export default function InputLevelMeter({ deviceId, vadMode, vadThreshold }: InputLevelMeterProps) {
+// a voice call. Values are shown as a 0-100 fill bar.
+export default function InputLevelMeter({ deviceId, vadMode }: InputLevelMeterProps) {
   const fillRef = useRef<HTMLDivElement>(null);
-  const thresholdRef = useRef<HTMLDivElement>(null);
   const valueRef = useRef<HTMLSpanElement>(null);
-  const noiseFloorRef = useRef(3);
-  const autoThresholdRef = useRef(9);
 
   useEffect(() => {
-    noiseFloorRef.current = 3;
-    autoThresholdRef.current = 9;
-
     let cancelled = false;
     let stream: MediaStream | null = null;
     let ctx: AudioContext | null = null;
@@ -49,33 +42,9 @@ export default function InputLevelMeter({ deviceId, vadMode, vadThreshold }: Inp
           const avg = sum / data.length;
           const pct = Math.min(avg, 100);
 
-          let threshold: number;
-          if (vadMode === 'manual') {
-            threshold = vadThreshold;
-          } else if (vadMode === 'auto') {
-            // Mirrors the VoiceClient auto-VAD: slow rise / fast fall noise
-            // tracking, small additive margin, hard cap on threshold.
-            const quietCap = noiseFloorRef.current + 4;
-            if (avg < quietCap) {
-              const alpha = avg > noiseFloorRef.current ? 0.02 : 0.25;
-              noiseFloorRef.current = noiseFloorRef.current * (1 - alpha) + avg * alpha;
-            }
-            noiseFloorRef.current = Math.max(0.5, Math.min(noiseFloorRef.current, 20));
-            autoThresholdRef.current = Math.min(Math.max(noiseFloorRef.current + 6, 5), 40);
-            threshold = autoThresholdRef.current;
-          } else {
-            threshold = 0;
-          }
-
           if (fillRef.current) {
             fillRef.current.style.width = `${pct}%`;
-            fillRef.current.style.background = avg > threshold
-              ? 'var(--primary)'
-              : 'var(--muted-foreground)';
-          }
-          if (thresholdRef.current) {
-            thresholdRef.current.style.left = `${Math.min(threshold, 100)}%`;
-            thresholdRef.current.style.display = vadMode === 'off' ? 'none' : 'block';
+            fillRef.current.style.background = 'var(--primary)';
           }
           if (valueRef.current) valueRef.current.textContent = String(Math.round(avg));
         }
@@ -90,17 +59,12 @@ export default function InputLevelMeter({ deviceId, vadMode, vadThreshold }: Inp
       if (stream) stream.getTracks().forEach((t) => t.stop());
       if (ctx) ctx.close().catch(() => {});
     };
-  }, [deviceId, vadMode, vadThreshold]);
+  }, [deviceId, vadMode]);
 
   return (
     <div className="flex items-center gap-2">
       <div className="relative flex-1 h-2 rounded-full bg-muted overflow-hidden">
         <div ref={fillRef} className="absolute inset-y-0 left-0 transition-[width,background] duration-75" style={{ width: 0 }} />
-        <div
-          ref={thresholdRef}
-          className="absolute inset-y-0 w-0.5 bg-foreground"
-          style={{ left: 0 }}
-        />
       </div>
       <span ref={valueRef} className="text-xs text-muted-foreground tabular-nums w-8 text-right">0</span>
     </div>

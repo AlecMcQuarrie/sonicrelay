@@ -1,8 +1,28 @@
 import { Device } from 'mediasoup-client';
 import type { types } from 'mediasoup-client';
+import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
+import { MicVAD } from '@ricky0123/vad-web';
+import { LoudnessWorkletNode } from 'loudness-worklet';
 
 const EQ_FREQS = [80, 250, 1000, 4000, 10000];
 const EQ_TYPES: BiquadFilterType[] = ['lowshelf', 'peaking', 'peaking', 'peaking', 'highshelf'];
+
+// Asset paths served by vite-plugin-static-copy from /audio. The worklet
+// modules and WASM binaries need to be reachable at runtime under these URLs.
+const AUDIO_ASSETS = {
+  rnnoiseWorklet: '/audio/rnnoise-worklet.js',
+  rnnoiseWasm: '/audio/rnnoise.wasm',
+  rnnoiseSimdWasm: '/audio/rnnoise_simd.wasm',
+  vadBase: '/audio/',
+  ortBase: '/audio/',
+};
+
+// Target playback loudness for LUFS-based per-peer normalization. Discord-ish.
+const LUFS_TARGET = -20;
+// Clamp per-peer normalization gain so a momentarily silent peer can't blow
+// out everyone's speakers when they start talking.
+const LUFS_GAIN_MIN = 0.25;
+const LUFS_GAIN_MAX = 4.0;
 
 export type ScreenShareSettings = {
   resolution: 720 | 1080 | 1440;
@@ -98,6 +118,7 @@ export class VoiceClient {
 
   // Audio level monitoring
   private audioContext: AudioContext | null = null;
+  private limiterNode: DynamicsCompressorNode | null = null;
   private analysers = new Map<string, AnalyserNode>(); // username -> analyser
   private userLevels = new Map<string, number>(); // username -> smoothed level 0..1
   private producerUsernames = new Map<string, string>(); // producerId -> username
@@ -111,20 +132,31 @@ export class VoiceClient {
   private rawMicStream: MediaStream | null = null;
   private micGain = 1;
   private speakerGain = 1;
-  private vadMode: 'off' | 'auto' | 'manual' = 'off';
-  private vadThreshold = 30;
-  private vadNoiseFloor = 3;
-  private vadHangoverUntil = 0; // timestamp until which auto-VAD keeps the gate open
+  // VAD modes: off = always open, auto = Silero-driven. "Manual threshold"
+  // was dropped once Silero landed — it was never better than a hand-tuned
+  // auto gate. PTT layers on top of either.
+  private vadMode: 'off' | 'auto' = 'off';
   private pttEnabled = false;
   private pttKey = '';
   private pttHeld = false;
-  private lastLocalRms = 0; // 0..100, scaled from byte-domain RMS
+  // Silero-driven speaking state for the local mic. `true` while Silero
+  // considers the user to be speaking (between onSpeechStart / onSpeechEnd).
+  private silenceDetected = true;
+  private micVAD: MicVAD | null = null;
+  private micVADPromise: Promise<void> | null = null;
   private userBaseVolumes = new Map<string, number>(); // username -> 0..2 (pre-speakerGain)
   private userMutedState = new Map<string, boolean>(); // username -> muted
   private userGainNodes = new Map<string, GainNode>(); // username -> receive gain
   private trackPumpers = new Map<string, HTMLAudioElement>(); // muted <audio> per user that keeps WebRTC tracks flowing into Web Audio
-  private compressorNode: DynamicsCompressorNode | null = null;
-  private makeupGainNode: GainNode | null = null;
+  // Per-peer LUFS normalization state.
+  private loudnessNodes = new Map<string, AudioWorkletNode>(); // username -> BS.1770 worklet
+  private normalizationFactors = new Map<string, number>(); // username -> 0.25..4.0 gain multiplier
+  private loudnessWorkletPromise: Promise<void> | null = null;
+  // RNNoise state. Lazy-loaded on first mic graph build; cached thereafter.
+  private rnnoiseEnabled = true;
+  private rnnoiseNode: AudioWorkletNode | null = null;
+  private rnnoiseWasmBinary: ArrayBuffer | null = null;
+  private rnnoiseWorkletPromise: Promise<void> | null = null;
   private masterGainNode: GainNode | null = null;
   // Tap off the peer-voice mix (post-master, same signal the speakers play)
   // so startScreenShare can cancel it out of the system loopback capture —
@@ -134,6 +166,17 @@ export class VoiceClient {
   private aecWorkletPromise: Promise<void> | null = null;
   private aecNodes: AudioNode[] = [];
   private aecStream: MediaStream | null = null;
+  // Coarse-delay alignment: the system loopback round-trip (50–250 ms) usually
+  // exceeds the NLMS tap window (2048 samples = 42 ms at 48 kHz). A DelayNode
+  // on the reference path shifts the reference to line up with the actual
+  // echo, leaving the filter free to model just the residual tail.
+  private aecRefDelay: DelayNode | null = null;
+  private aecMeasureNodes: AudioNode[] = [];
+  private aecRefBuffer: Float32Array | null = null;
+  private aecCapBuffer: Float32Array | null = null;
+  private aecBufferWrite = 0;
+  private aecBufferFilled = 0;
+  private aecLastMeasure = 0;
   private normalizeVoices = true;
   private eqEnabled = false;
   private eqBands: { gain: number; q: number }[] = EQ_FREQS.map(() => ({ gain: 0, q: 1 }));
@@ -150,14 +193,17 @@ export class VoiceClient {
     this.micGain = parseFloat(localStorage.getItem('micGain') ?? '1');
     this.speakerGain = parseFloat(localStorage.getItem('speakerGain') ?? '1');
     const storedMode = localStorage.getItem('vadMode');
-    if (storedMode === 'off' || storedMode === 'auto' || storedMode === 'manual') this.vadMode = storedMode;
-    this.vadThreshold = parseFloat(localStorage.getItem('vadThreshold') ?? '30');
+    // Migrate the removed 'manual' mode to 'auto' (Silero supersedes it).
+    if (storedMode === 'off' || storedMode === 'auto') this.vadMode = storedMode;
+    else if (storedMode === 'manual') this.vadMode = 'auto';
     this.pttEnabled = localStorage.getItem('pttEnabled') === 'true';
     this.pttKey = localStorage.getItem('pttKey') ?? '';
     // Default ON when no stored value — existing users who explicitly turned
     // normalization off keep their preference.
     const storedNormalize = localStorage.getItem('normalizeVoices');
     this.normalizeVoices = storedNormalize === null ? true : storedNormalize === 'true';
+    const storedRnnoise = localStorage.getItem('rnnoiseEnabled');
+    this.rnnoiseEnabled = storedRnnoise === null ? true : storedRnnoise === 'true';
     this.eqEnabled = localStorage.getItem('micEqEnabled') === 'true';
     const storedBands = localStorage.getItem('micEqBands');
     if (storedBands) {
@@ -227,33 +273,54 @@ export class VoiceClient {
       this.channelId = channelId;
       if (username) this.localUsername = username;
       this.device = new Device();
-      this.audioContext = new AudioContext();
+      // Pin to 48 kHz so the whole graph (WebRTC Opus, mic source, worklets)
+      // runs at one rate. Some hardware (older macOS USB devices) rejects
+      // the exact-rate constructor — fall back to the OS default in that
+      // case. RNNoise assumes 48 kHz input; if the fallback context isn't
+      // at 48 kHz we'll skip instantiating RNNoise in buildMicGraph.
+      try {
+        this.audioContext = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+      } catch {
+        this.audioContext = new AudioContext({ latencyHint: 'interactive' });
+      }
       // Browsers may start AudioContext in suspended state — resume it
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
 
-      // Shared receive graph: every remote mic feeds one GainNode per user,
-      // which routes into either the compressor chain or straight to the
-      // master gain depending on the "Normalize voices" toggle. Final output
-      // goes through audioContext.destination — avoiding an <audio> element
-      // here is deliberate: Chrome's tab-audio capture (getDisplayMedia with
-      // audio: true) includes DOM-attached media elements before setSinkId
-      // routing, so an <audio> sink would leak the received voice back into
-      // our own screen-share audio.
-      this.compressorNode = this.audioContext.createDynamicsCompressor();
-      this.compressorNode.threshold.value = -18;
-      this.compressorNode.knee.value = 20;
-      this.compressorNode.ratio.value = 4;
-      this.compressorNode.attack.value = 0.003;
-      this.compressorNode.release.value = 0.25;
-      this.makeupGainNode = this.audioContext.createGain();
-      this.makeupGainNode.gain.value = 2;
+      // Shared receive graph: every remote mic feeds one GainNode per user
+      // whose gain is driven by per-peer LUFS measurement when normalization
+      // is enabled (see consumeProducer / updateNormalizationFactor). All
+      // per-peer gains sum into masterGain, then pass through a brickwall
+      // limiter before hitting the destination.
+      //
+      // Final output goes through audioContext.destination — avoiding an
+      // <audio> element here is deliberate: Chrome's tab-audio capture
+      // (getDisplayMedia with audio: true) includes DOM-attached media
+      // elements before setSinkId routing, so an <audio> sink would leak
+      // the received voice back into our own screen-share audio.
       this.masterGainNode = this.audioContext.createGain();
       this.masterGainNode.gain.value = 1; // deafen sets to 0
-      this.compressorNode.connect(this.makeupGainNode);
-      this.makeupGainNode.connect(this.masterGainNode);
-      this.masterGainNode.connect(this.audioContext.destination);
+      // Brickwall limiter on the master bus. With per-peer LUFS gains
+      // clamped to [0.25, 4.0] and per-user volume sliders on top, summed
+      // peaks can still overshoot ±1.0 — the limiter keeps the destination
+      // honest without audible pumping on single-speaker content.
+      this.limiterNode = this.audioContext.createDynamicsCompressor();
+      this.limiterNode.threshold.value = -1;
+      this.limiterNode.knee.value = 0;
+      this.limiterNode.ratio.value = 20;
+      this.limiterNode.attack.value = 0.001;
+      this.limiterNode.release.value = 0.05;
+      this.masterGainNode.connect(this.limiterNode);
+      this.limiterNode.connect(this.audioContext.destination);
+
+      // LUFS worklet module load — shared across every per-peer instance
+      // created in consumeProducer. Deferred cached promise mirrors the
+      // pattern used for the AEC and RNNoise worklets.
+      this.loudnessWorkletPromise = LoudnessWorkletNode.loadModule(this.audioContext).catch(() => {
+        // If the module fails to load, per-peer normalization silently
+        // falls back to unity gain — speech still plays, just not LUFS-leveled.
+      });
       // Second output branch: peer-voice mix as a MediaStream. Used only
       // while screen-sharing with audio to subtract our own received voices
       // from the loopback capture (mix-minus).
@@ -294,18 +361,18 @@ export class VoiceClient {
       });
 
       // Produce audio from microphone. The raw stream is routed through a
-      // Web Audio graph (source → micGain → vadGate → destination) so master
-      // volume, VAD, and PTT can be applied before the track reaches mediasoup.
+      // Web Audio graph (source → [RNNoise] → EQ → micGain → vadGate → dest)
+      // so noise suppression, EQ, gain, and VAD can be applied before the
+      // track reaches mediasoup.
       //
       // autoGainControl: false — Chromium's AGC silently lowers input gain
       //   mid-session on USB interfaces like the Wave XLR.
       // echoCancellation / noiseSuppression: false — setting either to true
       //   opens the mic in Windows' "Communications" audio category, which
       //   triggers the OS-level ducking rule that drops every other app's
-      //   volume (Discord, Spotify, game audio) by up to 80%. Targeted at
-      //   headphone users, for whom speaker-to-mic echo isn't a concern.
-      //   Speaker users may hear echo; they can enable OS-level AEC via
-      //   their audio driver or wear headphones.
+      //   volume (Discord, Spotify, game audio) by up to 80%. We run
+      //   RNNoise in userspace instead, which gives equivalent noise
+      //   suppression without touching the OS audio category.
       const preferredAudio = localStorage.getItem("preferredAudioDevice");
       const micConstraints = {
         autoGainControl: false,
@@ -325,19 +392,31 @@ export class VoiceClient {
           audio: micConstraints,
         });
       }
-      const gatedTrack = this.buildMicGraph(this.rawMicStream);
+      // RNNoise WASM + worklet need to be ready before buildMicGraph can
+      // insert the node. One-time ~250 KB fetch on first voice join; cached
+      // thereafter. Time-box the load so a slow / stuck network can't hang
+      // the whole voice-join path — on timeout buildMicGraph skips RNNoise
+      // and the user still gets audio (just without noise suppression).
+      await Promise.race([
+        this.ensureRnnoise(),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
+      const gatedTrack = await this.buildMicGraph(this.rawMicStream);
       // opusFec: in-band Forward Error Correction — recovers single lost packets
       //   without retransmit. Biggest audible win on lossy networks.
       // opusNack: NACK-based retransmission of lost audio packets.
-      // opusDtx:  skip silence between words to save bandwidth (mic is mono voice).
       // opusStereo=false: explicit mono; stereo on a single mic is wasted bits.
+      // opusMaxAverageBitrate=64000: Opus default negotiates ~32 kbps for mono;
+      //   64 kbps is where voice stops sounding compressed (Discord-tier).
+      // DTX intentionally omitted — its SID/active-frame transitions produce
+      //   audible blips at speech onset on some Opus decoders.
       this.audioProducer = await this.sendTransport.produce({
         track: gatedTrack,
         codecOptions: {
           opusFec: true,
           opusNack: true,
-          opusDtx: true,
           opusStereo: false,
+          opusMaxAverageBitrate: 64000,
         },
       });
 
@@ -375,6 +454,10 @@ export class VoiceClient {
 
       // Start polling audio levels
       this.startLevelMonitoring();
+
+      // Kick off Silero in the background if auto-VAD is selected. Fire and
+      // forget — the model download shouldn't block the join from resolving.
+      if (this.vadMode === 'auto') this.ensureMicVAD();
     } finally {
       this.joinInProgress = false;
     }
@@ -423,14 +506,13 @@ export class VoiceClient {
       return;
     }
 
-    // Route received mic audio through the shared receive graph. One source feeds
-    // both the per-user GainNode and the level-monitoring analyser.
+    // Route received mic audio through the per-peer graph. One source feeds
+    // the per-user GainNode, a BS.1770 loudness meter (for normalization),
+    // and an analyser (for the speaking indicator).
     if (remoteUsername && this.audioContext && this.masterGainNode) {
       // Chromium won't deliver audio from a WebRTC-sourced track into
-      // createMediaStreamSource unless an <audio> element is actively playing
-      // that track — otherwise the graph outputs silence. Create a muted,
-      // DOM-attached pump element per peer. Audible output still comes from
-      // the Web Audio graph feeding voiceAudio.
+      // createMediaStreamSource unless an <audio> element is actively
+      // playing that track. Create a muted, DOM-attached pump per peer.
       const pumper = new Audio();
       pumper.srcObject = new MediaStream([consumer.track]);
       pumper.muted = true;
@@ -443,13 +525,32 @@ export class VoiceClient {
       const gainNode = this.audioContext.createGain();
       trackSource.connect(gainNode);
       this.userGainNodes.set(remoteUsername, gainNode);
+      gainNode.connect(this.masterGainNode);
       this.applyUserGain(remoteUsername);
-      this.routeUserGain(gainNode);
 
-      // Tap the analyser off the per-user GainNode (post-volume) so the
-      // speaking indicator intensity tracks what this listener actually hears
-      // — boosting a quiet peer also boosts their indicator. Kept as a
-      // permanent connection; routeUserGain only re-wires the main output.
+      // Per-peer LUFS meter. Independent per-peer measurement means one
+      // loud peer can't duck everyone else the way the old shared
+      // compressor did. The meter runs in parallel with playback — it
+      // only reads; output still flows gainNode → masterGain.
+      if (this.loudnessWorkletPromise) {
+        const captureUsername = remoteUsername;
+        this.loudnessWorkletPromise.then(() => {
+          if (!this.audioContext || this.userGainNodes.get(captureUsername) !== gainNode) return;
+          try {
+            const meter = new LoudnessWorkletNode(this.audioContext, {
+              processorOptions: { interval: 0.4, capacity: 10 },
+            });
+            meter.port.onmessage = (event) => this.onLoudnessMessage(captureUsername, event.data);
+            trackSource.connect(meter);
+            this.loudnessNodes.set(captureUsername, meter);
+          } catch {
+            // Non-fatal: peer plays at unity normalization gain.
+          }
+        });
+      }
+
+      // Analyser tap for the speaking indicator, post per-peer gain so
+      // boosting a quiet peer also boosts their indicator intensity.
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 256;
       gainNode.connect(analyser);
@@ -457,24 +558,44 @@ export class VoiceClient {
     }
   }
 
-  private routeUserGain(gainNode: GainNode) {
-    // Only touch the main output edges; leave the analyser tap alone. The
-    // targeted disconnect throws if not currently connected — swallow that.
-    if (this.compressorNode) { try { gainNode.disconnect(this.compressorNode); } catch {} }
-    if (this.masterGainNode) { try { gainNode.disconnect(this.masterGainNode); } catch {} }
-    if (this.normalizeVoices && this.compressorNode) {
-      gainNode.connect(this.compressorNode);
-    } else if (this.masterGainNode) {
-      gainNode.connect(this.masterGainNode);
-    }
+  // Consume one LUFS snapshot from the per-peer worklet. We read the most
+  // recent short-term loudness value and, when it's meaningful, nudge that
+  // peer's normalization factor toward the gain that would put them at
+  // LUFS_TARGET. The actual GainNode update is smoothed by applyUserGain
+  // below (a setTargetAtTime ramp, not a step).
+  private onLoudnessMessage(username: string, data: any) {
+    if (!this.normalizeVoices) return;
+    const ms: Array<{ shortTermLoudness: number }> | undefined = data?.currentMeasurements;
+    if (!ms || ms.length === 0) return;
+    const last = ms[ms.length - 1];
+    const lufs = last?.shortTermLoudness;
+    // BS.1770 returns −Infinity / very negative values for silence; ignore.
+    if (!Number.isFinite(lufs) || lufs < -60) return;
+    const rawFactor = Math.pow(10, (LUFS_TARGET - lufs) / 20);
+    const clamped = Math.max(LUFS_GAIN_MIN, Math.min(LUFS_GAIN_MAX, rawFactor));
+    const prev = this.normalizationFactors.get(username) ?? 1;
+    // Slew limit — blend 25 % of the new estimate per 400 ms tick so the
+    // factor settles over a few seconds without pumping.
+    const next = prev * 0.75 + clamped * 0.25;
+    this.normalizationFactors.set(username, next);
+    this.applyUserGain(username);
   }
 
   private applyUserGain(username: string) {
     const node = this.userGainNodes.get(username);
-    if (!node) return;
+    if (!node || !this.audioContext) return;
     const muted = this.userMutedState.get(username) ?? false;
     const base = this.userBaseVolumes.get(username) ?? 1;
-    node.gain.value = muted ? 0 : base * this.speakerGain;
+    const norm = this.normalizeVoices ? (this.normalizationFactors.get(username) ?? 1) : 1;
+    const target = muted ? 0 : base * this.speakerGain * norm;
+    // Smooth ramp instead of a step avoids zipper noise when the LUFS
+    // estimate updates and keeps manual volume-slider drags glitch-free.
+    try {
+      node.gain.cancelScheduledValues(this.audioContext.currentTime);
+      node.gain.setTargetAtTime(target, this.audioContext.currentTime, 0.05);
+    } catch {
+      node.gain.value = target;
+    }
   }
 
   private removeProducer(producerId: string) {
@@ -530,9 +651,9 @@ export class VoiceClient {
   // paths with non-trivial frequency response, and the slow/unreliable
   // convergence of a cross-correlation latency seeker.
   //
-  // 1024 taps at 48kHz = ~21ms of impulse response, which covers typical
-  // WASAPI loopback latency with headroom. Bluetooth (100–250ms) won't be
-  // fully cancelled, but residual is still reduced.
+  // 2048 taps at 48 kHz = ~43 ms of impulse response. The bulk round-trip
+  // delay (30–250 ms) is absorbed by a separately-driven DelayNode on the
+  // reference path; the filter's taps need only cover the residual tail.
   //
   // Runs inside AudioWorkletGlobalScope — no closures over outer scope,
   // no imports. If any of that changes, the source must remain a plain
@@ -656,20 +777,29 @@ registerProcessor('nlms-aec', NlmsAec);
       this.tearDownAec();
       const loopbackSource = ctx.createMediaStreamSource(new MediaStream([loopbackTrack]));
       const voiceSource = ctx.createMediaStreamSource(voiceMix.stream);
+      // DelayNode on the reference path. Coarse delay estimator will set
+      // this to roughly the measured loopback round-trip minus a small
+      // safety margin, so the filter's 2048 taps land on the echo tail
+      // instead of being consumed by the bulk delay.
+      const refDelay = ctx.createDelay(0.5);
+      refDelay.delayTime.value = 0;
       const aec = new AudioWorkletNode(ctx, 'nlms-aec', {
         numberOfInputs: 2,
         numberOfOutputs: 1,
         outputChannelCount: [1],
-        processorOptions: { N: 1024 },
+        processorOptions: { N: 2048 },
       });
       const dest = ctx.createMediaStreamDestination();
-      voiceSource.connect(aec, 0, 0);
+      voiceSource.connect(refDelay);
+      refDelay.connect(aec, 0, 0);
       loopbackSource.connect(aec, 0, 1);
       aec.connect(dest);
       const outTrack = dest.stream.getAudioTracks()[0];
       if (!outTrack) return null;
-      this.aecNodes = [loopbackSource, voiceSource, aec, dest];
+      this.aecRefDelay = refDelay;
+      this.aecNodes = [loopbackSource, voiceSource, refDelay, aec, dest];
       this.aecStream = dest.stream;
+      this.installAecDelayMeasurer(voiceSource, loopbackSource);
       return outTrack;
     } catch {
       this.tearDownAec();
@@ -677,18 +807,191 @@ registerProcessor('nlms-aec', NlmsAec);
     }
   }
 
+  // Coarse cross-correlation delay estimator. Taps the same reference and
+  // loopback streams the NLMS worklet uses, writes them into ring buffers,
+  // and periodically correlates to find the round-trip delay. Runs only
+  // when the reference has meaningful energy (peers talking) — correlating
+  // silence yields random peaks.
+  private installAecDelayMeasurer(voiceSource: AudioNode, loopbackSource: AudioNode) {
+    const ctx = this.audioContext;
+    if (!ctx) return;
+    try {
+      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.5); // 500 ms window
+      this.aecRefBuffer = new Float32Array(BUFFER_SAMPLES);
+      this.aecCapBuffer = new Float32Array(BUFFER_SAMPLES);
+      this.aecBufferWrite = 0;
+      this.aecBufferFilled = 0;
+      this.aecLastMeasure = 0;
+
+      // ChannelMerger feeds both signals into one ScriptProcessor so
+      // writes into the ring buffers stay sample-aligned.
+      const merger = ctx.createChannelMerger(2);
+      voiceSource.connect(merger, 0, 0);
+      loopbackSource.connect(merger, 0, 1);
+      // ScriptProcessor is deprecated but fine here: the per-block work
+      // is a plain ring-buffer copy. Correlation runs off-thread via
+      // queueMicrotask so it never blocks the audio callback.
+      const proc = ctx.createScriptProcessor(4096, 2, 1);
+      merger.connect(proc);
+      // ScriptProcessor must connect to a live destination to pump.
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
+      proc.connect(silent);
+      silent.connect(ctx.destination);
+
+      proc.onaudioprocess = (event) => {
+        const ref = event.inputBuffer.getChannelData(0);
+        const cap = event.inputBuffer.getChannelData(1);
+        const refBuf = this.aecRefBuffer;
+        const capBuf = this.aecCapBuffer;
+        if (!refBuf || !capBuf) return;
+        const size = refBuf.length;
+        let w = this.aecBufferWrite;
+        for (let i = 0; i < ref.length; i++) {
+          refBuf[w] = ref[i];
+          capBuf[w] = cap[i];
+          w = w + 1;
+          if (w >= size) w = 0;
+        }
+        this.aecBufferWrite = w;
+        this.aecBufferFilled = Math.min(this.aecBufferFilled + ref.length, size);
+
+        const now = performance.now();
+        if (this.aecBufferFilled >= size && now - this.aecLastMeasure > 2000) {
+          this.aecLastMeasure = now;
+          queueMicrotask(() => this.runAecDelayCorrelation());
+        }
+      };
+
+      this.aecMeasureNodes = [merger, proc, silent];
+    } catch {
+      // Measurer failure is non-fatal; NLMS still runs at delayTime = 0.
+    }
+  }
+
+  private runAecDelayCorrelation() {
+    const ctx = this.audioContext;
+    const ref = this.aecRefBuffer;
+    const cap = this.aecCapBuffer;
+    const delayNode = this.aecRefDelay;
+    if (!ctx || !ref || !cap || !delayNode) return;
+    const size = ref.length;
+    const sr = ctx.sampleRate;
+    const write = this.aecBufferWrite;
+
+    // Linearize the ring buffers so indexing matches time order.
+    const lin = (src: Float32Array) => {
+      const out = new Float32Array(size);
+      const tailLen = size - write;
+      out.set(src.subarray(write), 0);
+      out.set(src.subarray(0, write), tailLen);
+      return out;
+    };
+    const refLin = lin(ref);
+    const capLin = lin(cap);
+
+    // Energy gate: correlating silence produces random peaks that would
+    // jitter the DelayNode for no gain.
+    const gateWin = Math.min(size, Math.round(0.1 * sr));
+    let rmsSq = 0;
+    for (let i = size - gateWin; i < size; i++) rmsSq += refLin[i] * refLin[i];
+    const rms = Math.sqrt(rmsSq / gateWin);
+    if (rms < 0.005) return;
+
+    // 100 ms correlation window against lags from 0 to 300 ms. Capture is
+    // always delayed relative to reference, so we only search positive lag.
+    const winSize = Math.round(0.1 * sr);
+    const winStart = size - winSize;
+    const minLag = 0;
+    const maxLag = Math.min(winStart, Math.round(0.3 * sr));
+
+    let bestLag = minLag;
+    let bestCorr = -Infinity;
+    let sumAbsCorr = 0;
+    let samples = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      const capStart = winStart - lag;
+      let sum = 0;
+      for (let j = 0; j < winSize; j++) {
+        sum += refLin[winStart + j] * capLin[capStart + j];
+      }
+      sumAbsCorr += Math.abs(sum);
+      samples++;
+      if (sum > bestCorr) {
+        bestCorr = sum;
+        bestLag = lag;
+      }
+    }
+
+    // Require the peak to stand clearly above the average absolute
+    // correlation; otherwise we're fitting to noise.
+    const meanAbs = samples > 0 ? sumAbsCorr / samples : 0;
+    if (bestCorr < meanAbs * 4) return;
+
+    // Measured lag = how much capture trails reference. Delay the reference
+    // by (lag − safety) so the filter's taps start slightly ahead of the
+    // echo onset and cover its tail.
+    const measuredSec = bestLag / sr;
+    const safetyMarginSec = 0.010; // 10 ms headroom for taps to pick up pre-echo
+    const delaySec = Math.max(0, measuredSec - safetyMarginSec);
+    try {
+      delayNode.delayTime.cancelScheduledValues(ctx.currentTime);
+      // Smooth ramp prevents a pitch wobble on whatever reference content
+      // is currently being subtracted.
+      delayNode.delayTime.setTargetAtTime(delaySec, ctx.currentTime, 0.25);
+    } catch {}
+  }
+
   private tearDownAec() {
     for (const n of this.aecNodes) { try { n.disconnect(); } catch {} }
     this.aecNodes = [];
+    for (const n of this.aecMeasureNodes) {
+      try { (n as ScriptProcessorNode).onaudioprocess = null as any; } catch {}
+      try { n.disconnect(); } catch {}
+    }
+    this.aecMeasureNodes = [];
+    this.aecRefDelay = null;
+    this.aecRefBuffer = null;
+    this.aecCapBuffer = null;
+    this.aecBufferWrite = 0;
+    this.aecBufferFilled = 0;
+    this.aecLastMeasure = 0;
     this.aecStream?.getTracks().forEach((t) => t.stop());
     this.aecStream = null;
   }
 
-  private buildMicGraph(stream: MediaStream): MediaStreamTrack {
+  // Load RNNoise WASM + worklet module once per AudioContext, cache the
+  // promise so repeated mic rebuilds don't re-fetch. Safe to call when
+  // RNNoise is toggled off — we still pay the load cost once so toggling
+  // on mid-call doesn't block.
+  private ensureRnnoise(): Promise<void> {
+    if (this.rnnoiseWorkletPromise) return this.rnnoiseWorkletPromise;
+    const ctx = this.audioContext;
+    if (!ctx) return Promise.reject(new Error('AudioContext not initialized'));
+    this.rnnoiseWorkletPromise = (async () => {
+      try {
+        const [wasm] = await Promise.all([
+          loadRnnoise({ url: AUDIO_ASSETS.rnnoiseWasm, simdUrl: AUDIO_ASSETS.rnnoiseSimdWasm }),
+          ctx.audioWorklet.addModule(AUDIO_ASSETS.rnnoiseWorklet),
+        ]);
+        this.rnnoiseWasmBinary = wasm;
+      } catch {
+        // Fatal for RNNoise but not for voice overall — mic graph falls
+        // back to the non-RNNoise path if we can't construct the node.
+        this.rnnoiseWasmBinary = null;
+      }
+    })();
+    return this.rnnoiseWorkletPromise;
+  }
+
+  private async buildMicGraph(stream: MediaStream): Promise<MediaStreamTrack> {
     if (!this.audioContext) throw new Error('AudioContext not initialized');
     this.micGainNode?.disconnect();
     this.vadGateNode?.disconnect();
     this.micDestination?.disconnect();
+    this.rnnoiseNode?.disconnect();
+    try { (this.rnnoiseNode as any)?.destroy?.(); } catch {}
+    this.rnnoiseNode = null;
     this.eqNodes.forEach((n) => n.disconnect());
     this.eqNodes = [];
 
@@ -696,12 +999,32 @@ registerProcessor('nlms-aec', NlmsAec);
     this.micGainNode = this.audioContext.createGain();
     this.micGainNode.gain.value = this.micGain;
     this.vadGateNode = this.audioContext.createGain();
-    // Start open; startLevelMonitoring / PTT listeners will close it as needed.
+    // Start open; Silero callbacks and PTT listeners will close it as needed.
     this.vadGateNode.gain.value = 1;
     this.micDestination = this.audioContext.createMediaStreamDestination();
 
-    // Always build the EQ chain — keeps wiring stable across enable/disable.
-    // When disabled, all band gains are zeroed so the biquads are transparent.
+    // Instantiate RNNoise if enabled, the WASM + worklet loaded, and the
+    // AudioContext is running at RNNoise's required 48 kHz. A fallback
+    // context (see join()) at a different rate would produce pitch-shifted
+    // output — skip RNNoise in that case rather than ship garbage.
+    if (
+      this.rnnoiseEnabled &&
+      this.rnnoiseWasmBinary &&
+      this.audioContext.sampleRate === 48000
+    ) {
+      try {
+        this.rnnoiseNode = new RnnoiseWorkletNode(this.audioContext, {
+          wasmBinary: this.rnnoiseWasmBinary,
+          maxChannels: 1,
+        });
+      } catch {
+        this.rnnoiseNode = null;
+      }
+    }
+
+    // Build the EQ chain unconditionally — keeps wiring stable across
+    // enable/disable. When disabled, band gains are zeroed so biquads are
+    // transparent in magnitude (minor phase shift is inaudible).
     for (let i = 0; i < EQ_FREQS.length; i++) {
       const filter = this.audioContext.createBiquadFilter();
       filter.type = EQ_TYPES[i];
@@ -712,6 +1035,10 @@ registerProcessor('nlms-aec', NlmsAec);
     }
 
     let prev: AudioNode = source;
+    if (this.rnnoiseNode) {
+      prev.connect(this.rnnoiseNode);
+      prev = this.rnnoiseNode;
+    }
     for (const filter of this.eqNodes) {
       prev.connect(filter);
       prev = filter;
@@ -723,6 +1050,49 @@ registerProcessor('nlms-aec', NlmsAec);
     return this.micDestination.stream.getAudioTracks()[0];
   }
 
+  // Initialize Silero-based auto-VAD. Keeps a single MicVAD instance; the
+  // library opens its own tap on rawMicStream and reports speech-start/end
+  // via callbacks. onSpeech* drive this.silenceDetected; updateVadGate()
+  // turns that into the actual vadGate gain value.
+  private async ensureMicVAD() {
+    if (this.micVAD || this.micVADPromise) return this.micVADPromise ?? undefined;
+    const stream = this.rawMicStream;
+    if (!stream) return;
+    this.micVADPromise = (async () => {
+      try {
+        this.micVAD = await MicVAD.new({
+          // Feed Silero our existing mic stream instead of letting it open
+          // its own getUserMedia — we want exactly one mic instance.
+          getStream: async () => stream,
+          pauseStream: async () => {},
+          resumeStream: async (s) => s,
+          startOnLoad: true,
+          model: 'v5',
+          baseAssetPath: AUDIO_ASSETS.vadBase,
+          onnxWASMBasePath: AUDIO_ASSETS.ortBase,
+          onSpeechStart: () => {
+            this.silenceDetected = false;
+            this.updateVadGate();
+          },
+          onSpeechEnd: () => {
+            this.silenceDetected = true;
+            this.updateVadGate();
+          },
+          onVADMisfire: () => {
+            this.silenceDetected = true;
+            this.updateVadGate();
+          },
+        });
+      } catch {
+        // Silero failed to load — fall back to always-open gate in auto mode.
+        this.micVAD = null;
+        this.silenceDetected = false;
+        this.updateVadGate();
+      }
+    })();
+    return this.micVADPromise;
+  }
+
   private updateVadGate() {
     if (!this.vadGateNode) return;
     let open: boolean;
@@ -730,43 +1100,14 @@ registerProcessor('nlms-aec', NlmsAec);
       open = this.pttHeld;
     } else if (this.vadMode === 'off') {
       open = true;
-    } else if (this.vadMode === 'manual') {
-      open = this.lastLocalRms > this.vadThreshold;
     } else {
-      // Auto VAD with:
-      //  - conservative noise-floor tracking (only adapts when clearly quiet,
-      //    rises slowly, falls quickly — so speech tails never poison it)
-      //  - hysteresis: open threshold above close threshold so the gate
-      //    doesn't chatter around the boundary
-      //  - hangover: once open, stay open ~400ms after RMS drops so we don't
-      //    cut between syllables
-      const rms = this.lastLocalRms;
-      const now = performance.now();
-
-      const quietCap = this.vadNoiseFloor + 4; // only sample when clearly not speech
-      if (rms < quietCap) {
-        // Asymmetric smoothing: rise slowly (α=0.02), fall fast (α=0.25).
-        const alpha = rms > this.vadNoiseFloor ? 0.02 : 0.25;
-        this.vadNoiseFloor = this.vadNoiseFloor * (1 - alpha) + rms * alpha;
-      }
-      this.vadNoiseFloor = Math.max(0.5, Math.min(this.vadNoiseFloor, 20));
-
-      const openThresh = Math.min(Math.max(this.vadNoiseFloor + 6, 5), 40);
-      const closeThresh = openThresh * 0.6;
-
-      const wasHeld = now < this.vadHangoverUntil;
-      if (rms > openThresh) {
-        this.vadHangoverUntil = now + 400;
-        open = true;
-      } else if (rms > closeThresh && wasHeld) {
-        open = true;
-      } else {
-        open = wasHeld;
-      }
+      // Silero drives the gate in auto mode. While the model is still
+      // loading, silenceDetected defaults to true → gate closed. Once
+      // loaded, onSpeechStart / onSpeechEnd flip it within ~100 ms.
+      open = !this.silenceDetected;
     }
     // Short ramp avoids audible clicks on gate toggle. Web Audio ignores
-    // setTargetAtTime timing on a disconnected node, so wrap in a try just in
-    // case the graph was torn down mid-tick.
+    // setTargetAtTime timing on a disconnected node, so wrap in a try.
     try {
       const param = this.vadGateNode.gain;
       const ctx = this.audioContext;
@@ -800,12 +1141,6 @@ registerProcessor('nlms-aec', NlmsAec);
           sumSquares += deviation * deviation;
         }
         const rms = Math.sqrt(sumSquares / dataArray.length);
-
-        if (username === this.localUsername) {
-          // Scale to 0-100 to match the VAD threshold UI scale
-          this.lastLocalRms = (rms / 128) * 100;
-          this.updateVadGate();
-        }
 
         // Gate the indicator for the local user on whether we're actually
         // transmitting — PTT/VAD users shouldn't glow while peers hear silence.
@@ -1040,16 +1375,29 @@ registerProcessor('nlms-aec', NlmsAec);
     this.aecWorkletPromise = null;
     this.voiceMixDest?.disconnect();
     this.voiceMixDest = null;
-    this.compressorNode?.disconnect();
-    this.compressorNode = null;
-    this.makeupGainNode?.disconnect();
-    this.makeupGainNode = null;
+    this.loudnessNodes.forEach((n) => { try { n.disconnect(); } catch {} });
+    this.loudnessNodes.clear();
+    this.normalizationFactors.clear();
+    this.loudnessWorkletPromise = null;
     this.masterGainNode?.disconnect();
     this.masterGainNode = null;
+    this.limiterNode?.disconnect();
+    this.limiterNode = null;
+    // Stop Silero before releasing the mic stream so destroy() doesn't fire
+    // callbacks into a half-torn-down graph.
+    if (this.micVAD) { try { await this.micVAD.destroy(); } catch {} }
+    this.micVAD = null;
+    this.micVADPromise = null;
+    this.silenceDetected = true;
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.rawMicStream = null;
     this.eqNodes.forEach((n) => n.disconnect());
     this.eqNodes = [];
+    this.rnnoiseNode?.disconnect();
+    try { (this.rnnoiseNode as any)?.destroy?.(); } catch {}
+    this.rnnoiseNode = null;
+    this.rnnoiseWasmBinary = null;
+    this.rnnoiseWorkletPromise = null;
     this.micGainNode = null;
     this.vadGateNode = null;
     this.micDestination = null;
@@ -1096,6 +1444,11 @@ registerProcessor('nlms-aec', NlmsAec);
 
   async switchAudioDevice(deviceId: string) {
     if (!this.audioProducer || !this.sendTransport) return;
+    // Silero is bound to the old mic stream — tear it down before we stop
+    // the tracks, then reinitialize after the new stream is live.
+    if (this.micVAD) { try { await this.micVAD.destroy(); } catch {} }
+    this.micVAD = null;
+    this.micVADPromise = null;
     // Release the old mic hardware before grabbing the new one
     this.rawMicStream?.getTracks().forEach((t) => t.stop());
     // See join() for why echo / noise flags are disabled (Windows ducking).
@@ -1109,8 +1462,9 @@ registerProcessor('nlms-aec', NlmsAec);
         sampleRate: 48000,
       },
     });
-    const gatedTrack = this.buildMicGraph(this.rawMicStream);
+    const gatedTrack = await this.buildMicGraph(this.rawMicStream);
     await this.audioProducer.replaceTrack({ track: gatedTrack });
+    this.ensureMicVAD();
 
     // Rebuild local mic analyser on the raw stream
     if (this.localUsername && this.audioContext) {
@@ -1140,8 +1494,23 @@ registerProcessor('nlms-aec', NlmsAec);
   setNormalizeVoices(enabled: boolean) {
     this.normalizeVoices = enabled;
     localStorage.setItem('normalizeVoices', String(enabled));
-    for (const gainNode of this.userGainNodes.values()) {
-      this.routeUserGain(gainNode);
+    // When turning off, clear accumulated factors so turning back on
+    // starts fresh at unity and ramps up via the next few LUFS updates.
+    if (!enabled) this.normalizationFactors.clear();
+    for (const username of this.userGainNodes.keys()) {
+      this.applyUserGain(username);
+    }
+  }
+
+  setRnnoiseEnabled(enabled: boolean) {
+    this.rnnoiseEnabled = enabled;
+    localStorage.setItem('rnnoiseEnabled', String(enabled));
+    // Rebuild the mic graph and swap the outgoing track. Silero is fed by
+    // the raw mic stream so it doesn't need to rewire.
+    if (this.audioProducer && this.rawMicStream) {
+      this.buildMicGraph(this.rawMicStream).then((track) => {
+        return this.audioProducer?.replaceTrack({ track });
+      }).catch(() => {});
     }
   }
 
@@ -1169,17 +1538,15 @@ registerProcessor('nlms-aec', NlmsAec);
     return this.micDestination?.stream ?? null;
   }
 
-  setVadMode(mode: 'off' | 'auto' | 'manual') {
+  setVadMode(mode: 'off' | 'auto') {
     this.vadMode = mode;
-    this.vadNoiseFloor = 3;
-    this.vadHangoverUntil = 0;
     localStorage.setItem('vadMode', mode);
-    this.updateVadGate();
-  }
-
-  setVadThreshold(threshold: number) {
-    this.vadThreshold = threshold;
-    localStorage.setItem('vadThreshold', String(threshold));
+    if (mode === 'auto') {
+      // Lazy-init Silero the first time auto mode is selected while in a
+      // call. Closes the gate immediately until the model reports speech.
+      this.silenceDetected = true;
+      this.ensureMicVAD();
+    }
     this.updateVadGate();
   }
 

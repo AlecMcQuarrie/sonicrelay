@@ -160,11 +160,13 @@ const HEX6 = /^#[0-9a-fA-F]{6}$/;
 const SETTING_VALIDATORS: Record<string, (v: unknown) => unknown | undefined> = {
   micGain: (v) => typeof v === 'number' && v >= 0 && v <= 5 ? v : undefined,
   speakerGain: (v) => typeof v === 'number' && v >= 0 && v <= 5 ? v : undefined,
-  vadMode: (v) => v === 'off' || v === 'auto' || v === 'manual' ? v : undefined,
-  vadThreshold: (v) => typeof v === 'number' && v >= 0 && v <= 100 ? v : undefined,
+  // 'manual' was removed once Silero auto-VAD landed; accept it from older
+  // clients and coerce up at read time in the client, don't store it again.
+  vadMode: (v) => v === 'off' || v === 'auto' ? v : v === 'manual' ? 'auto' : undefined,
   pttEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   pttKey: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
   normalizeVoices: (v) => typeof v === 'boolean' ? v : undefined,
+  rnnoiseEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   micEqEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   micEqBands: (v) => {
     if (!Array.isArray(v) || v.length !== 5) return undefined;

@@ -25,11 +25,11 @@ export type EqBand = {
 export type UserSettings = {
   micGain?: number;
   speakerGain?: number;
-  vadMode?: 'off' | 'auto' | 'manual';
-  vadThreshold?: number;
+  vadMode?: 'off' | 'auto';
   pttEnabled?: boolean;
   pttKey?: string;
   normalizeVoices?: boolean;
+  rnnoiseEnabled?: boolean;
   micEqEnabled?: boolean;
   micEqBands?: EqBand[];
   theme?: string;
