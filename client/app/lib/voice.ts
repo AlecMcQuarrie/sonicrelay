@@ -1,8 +1,12 @@
 import { Device } from 'mediasoup-client';
 import type { types } from 'mediasoup-client';
-import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
-import { MicVAD } from '@ricky0123/vad-web';
-import { LoudnessWorkletNode } from 'loudness-worklet';
+// Audio-processing libs each define `class X extends AudioWorkletNode` at
+// module top level. Importing them statically would crash SSR (Node has no
+// AudioWorkletNode). Type-only imports keep the type info without emitting
+// a runtime require; the value-level references are loaded lazily in the
+// methods below via `await import(...)`.
+import type { RnnoiseWorkletNode as RnnoiseWorkletNodeType } from '@sapphi-red/web-noise-suppressor';
+import type { MicVAD as MicVADType } from '@ricky0123/vad-web';
 
 const EQ_FREQS = [80, 250, 1000, 4000, 10000];
 const EQ_TYPES: BiquadFilterType[] = ['lowshelf', 'peaking', 'peaking', 'peaking', 'highshelf'];
@@ -142,7 +146,7 @@ export class VoiceClient {
   // Silero-driven speaking state for the local mic. `true` while Silero
   // considers the user to be speaking (between onSpeechStart / onSpeechEnd).
   private silenceDetected = true;
-  private micVAD: MicVAD | null = null;
+  private micVAD: MicVADType | null = null;
   private micVADPromise: Promise<void> | null = null;
   private userBaseVolumes = new Map<string, number>(); // username -> 0..2 (pre-speakerGain)
   private userMutedState = new Map<string, boolean>(); // username -> muted
@@ -154,7 +158,7 @@ export class VoiceClient {
   private loudnessWorkletPromise: Promise<void> | null = null;
   // RNNoise state. Lazy-loaded on first mic graph build; cached thereafter.
   private rnnoiseEnabled = true;
-  private rnnoiseNode: AudioWorkletNode | null = null;
+  private rnnoiseNode: RnnoiseWorkletNodeType | null = null;
   private rnnoiseWasmBinary: ArrayBuffer | null = null;
   private rnnoiseWorkletPromise: Promise<void> | null = null;
   private masterGainNode: GainNode | null = null;
@@ -315,12 +319,18 @@ export class VoiceClient {
       this.limiterNode.connect(this.audioContext.destination);
 
       // LUFS worklet module load — shared across every per-peer instance
-      // created in consumeProducer. Deferred cached promise mirrors the
-      // pattern used for the AEC and RNNoise worklets.
-      this.loudnessWorkletPromise = LoudnessWorkletNode.loadModule(this.audioContext).catch(() => {
-        // If the module fails to load, per-peer normalization silently
-        // falls back to unity gain — speech still plays, just not LUFS-leveled.
-      });
+      // created in consumeProducer. Dynamic import so this file can be
+      // evaluated under SSR (loudness-worklet subclasses AudioWorkletNode
+      // at module top level, which Node doesn't have).
+      const ctx = this.audioContext;
+      this.loudnessWorkletPromise = (async () => {
+        try {
+          const { LoudnessWorkletNode } = await import('loudness-worklet');
+          await LoudnessWorkletNode.loadModule(ctx);
+        } catch {
+          // Non-fatal: per-peer normalization falls back to unity gain.
+        }
+      })();
       // Second output branch: peer-voice mix as a MediaStream. Used only
       // while screen-sharing with audio to subtract our own received voices
       // from the loopback capture (mix-minus).
@@ -534,19 +544,22 @@ export class VoiceClient {
       // only reads; output still flows gainNode → masterGain.
       if (this.loudnessWorkletPromise) {
         const captureUsername = remoteUsername;
-        this.loudnessWorkletPromise.then(() => {
-          if (!this.audioContext || this.userGainNodes.get(captureUsername) !== gainNode) return;
-          try {
-            const meter = new LoudnessWorkletNode(this.audioContext, {
-              processorOptions: { interval: 0.4, capacity: 10 },
-            });
-            meter.port.onmessage = (event) => this.onLoudnessMessage(captureUsername, event.data);
-            trackSource.connect(meter);
-            this.loudnessNodes.set(captureUsername, meter);
-          } catch {
-            // Non-fatal: peer plays at unity normalization gain.
-          }
-        });
+        this.loudnessWorkletPromise
+          .then(() => import('loudness-worklet'))
+          .then(({ LoudnessWorkletNode }) => {
+            if (!this.audioContext || this.userGainNodes.get(captureUsername) !== gainNode) return;
+            try {
+              const meter = new LoudnessWorkletNode(this.audioContext, {
+                processorOptions: { interval: 0.4, capacity: 10 },
+              });
+              meter.port.onmessage = (event) => this.onLoudnessMessage(captureUsername, event.data);
+              trackSource.connect(meter);
+              this.loudnessNodes.set(captureUsername, meter);
+            } catch {
+              // Non-fatal: peer plays at unity normalization gain.
+            }
+          })
+          .catch(() => {});
       }
 
       // Analyser tap for the speaking indicator, post per-peer gain so
@@ -970,14 +983,16 @@ registerProcessor('nlms-aec', NlmsAec);
     if (!ctx) return Promise.reject(new Error('AudioContext not initialized'));
     this.rnnoiseWorkletPromise = (async () => {
       try {
+        // Dynamic import — the package's entry pulls in a class that
+        // subclasses AudioWorkletNode, so it can't be evaluated under SSR.
+        const { loadRnnoise } = await import('@sapphi-red/web-noise-suppressor');
         const [wasm] = await Promise.all([
           loadRnnoise({ url: AUDIO_ASSETS.rnnoiseWasm, simdUrl: AUDIO_ASSETS.rnnoiseSimdWasm }),
           ctx.audioWorklet.addModule(AUDIO_ASSETS.rnnoiseWorklet),
         ]);
         this.rnnoiseWasmBinary = wasm;
       } catch {
-        // Fatal for RNNoise but not for voice overall — mic graph falls
-        // back to the non-RNNoise path if we can't construct the node.
+        // Non-fatal: mic graph falls back to the non-RNNoise path.
         this.rnnoiseWasmBinary = null;
       }
     })();
@@ -1013,6 +1028,7 @@ registerProcessor('nlms-aec', NlmsAec);
       this.audioContext.sampleRate === 48000
     ) {
       try {
+        const { RnnoiseWorkletNode } = await import('@sapphi-red/web-noise-suppressor');
         this.rnnoiseNode = new RnnoiseWorkletNode(this.audioContext, {
           wasmBinary: this.rnnoiseWasmBinary,
           maxChannels: 1,
@@ -1060,6 +1076,7 @@ registerProcessor('nlms-aec', NlmsAec);
     if (!stream) return;
     this.micVADPromise = (async () => {
       try {
+        const { MicVAD } = await import('@ricky0123/vad-web');
         this.micVAD = await MicVAD.new({
           // Feed Silero our existing mic stream instead of letting it open
           // its own getUserMedia — we want exactly one mic instance.
