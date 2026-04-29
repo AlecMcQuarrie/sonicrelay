@@ -28,7 +28,6 @@ export type UserSettings = {
   vadMode?: 'off' | 'auto';
   pttEnabled?: boolean;
   pttKey?: string;
-  normalizeVoices?: boolean;
   rnnoiseEnabled?: boolean;
   micEqEnabled?: boolean;
   micEqBands?: EqBand[];

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Mic, MicOff } from "lucide-react";
+import { DB_MIN, DB_MAX, DB_STEP, ampToDb, dbToAmp, formatDb, clampAmpToDbRange } from "~/lib/audio-units";
 
 type VoicePeerSetting = {
   volume: number;
@@ -15,11 +16,11 @@ interface PeerVolumeMenuProps {
 }
 
 export default function PeerVolumeMenu({ username, setting, disabled, onVolume, onMute }: PeerVolumeMenuProps) {
-  const [volume, setVolume] = useState(Math.max(0, Math.min(2, setting.volume)));
+  const [volumeDb, setVolumeDb] = useState(ampToDb(clampAmpToDbRange(setting.volume)));
   const [muted, setMuted] = useState(setting.muted);
 
   return (
-    <div className="p-2 space-y-2 min-w-[160px]" onClick={(e) => e.stopPropagation()}>
+    <div className="p-2 space-y-2 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
       <div className="text-xs font-medium truncate">{username}</div>
       <div className="flex items-center gap-2">
         <button
@@ -37,20 +38,20 @@ export default function PeerVolumeMenu({ username, setting, disabled, onVolume, 
         </button>
         <input
           type="range"
-          min="0"
-          max="2"
-          step="0.05"
-          value={volume}
+          min={DB_MIN}
+          max={DB_MAX}
+          step={DB_STEP}
+          value={volumeDb}
           disabled={disabled}
           className="w-full h-1 accent-foreground disabled:opacity-50"
           onChange={(e) => {
-            const v = parseFloat(e.target.value);
-            setVolume(v);
-            onVolume(username, v);
+            const db = parseFloat(e.target.value);
+            setVolumeDb(db);
+            onVolume(username, dbToAmp(db));
           }}
         />
-        <span className="text-[10px] text-muted-foreground tabular-nums min-w-[32px] text-right shrink-0">
-          {Math.round(volume * 100)}%
+        <span className="text-[10px] text-muted-foreground tabular-nums min-w-[52px] text-right shrink-0">
+          {formatDb(volumeDb)}
         </span>
       </div>
     </div>

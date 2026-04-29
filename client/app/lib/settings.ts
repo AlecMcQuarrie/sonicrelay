@@ -27,7 +27,6 @@ export type UserSettings = {
   vadMode: 'off' | 'auto';
   pttEnabled: boolean;
   pttKey: string;
-  normalizeVoices: boolean;
   rnnoiseEnabled: boolean;
   micEqEnabled: boolean;
   micEqBands: EqBand[];
@@ -41,7 +40,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   vadMode: 'off',
   pttEnabled: false,
   pttKey: '',
-  normalizeVoices: true,
   rnnoiseEnabled: true,
   micEqEnabled: false,
   micEqBands: DEFAULT_EQ_BANDS,
@@ -59,12 +57,6 @@ export function loadCachedSettings(): UserSettings {
     storedMode === 'off' ? 'off'
     : storedMode === 'auto' || storedMode === 'manual' ? 'auto'
     : DEFAULT_SETTINGS.vadMode;
-  // Treat absent key as default so existing users whose first visit predates
-  // the default flip (and never touched the toggle) get the new default too.
-  const storedNormalize = localStorage.getItem('normalizeVoices');
-  const normalizeVoices = storedNormalize === null
-    ? DEFAULT_SETTINGS.normalizeVoices
-    : storedNormalize === 'true';
   const storedRnnoise = localStorage.getItem('rnnoiseEnabled');
   const rnnoiseEnabled = storedRnnoise === null
     ? DEFAULT_SETTINGS.rnnoiseEnabled
@@ -89,7 +81,6 @@ export function loadCachedSettings(): UserSettings {
     vadMode,
     pttEnabled: localStorage.getItem('pttEnabled') === 'true',
     pttKey: localStorage.getItem('pttKey') ?? DEFAULT_SETTINGS.pttKey,
-    normalizeVoices,
     rnnoiseEnabled,
     micEqEnabled,
     micEqBands,
@@ -124,7 +115,6 @@ export function applyVoiceSettings(voice: VoiceClient | null, s: UserSettings) {
   voice.setVadMode(s.vadMode);
   voice.setPttEnabled(s.pttEnabled);
   voice.setPttKey(s.pttKey);
-  voice.setNormalizeVoices(s.normalizeVoices);
   voice.setRnnoiseEnabled(s.rnnoiseEnabled);
   voice.setMicEqEnabled(s.micEqEnabled);
   s.micEqBands.forEach((b, i) => voice.setEqBand(i, b.gain, b.q));

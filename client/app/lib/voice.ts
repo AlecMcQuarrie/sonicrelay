@@ -21,13 +21,6 @@ const AUDIO_ASSETS = {
   ortBase: '/audio/',
 };
 
-// Target playback loudness for LUFS-based per-peer normalization. Discord-ish.
-const LUFS_TARGET = -20;
-// Clamp per-peer normalization gain so a momentarily silent peer can't blow
-// out everyone's speakers when they start talking.
-const LUFS_GAIN_MIN = 0.25;
-const LUFS_GAIN_MAX = 4.0;
-
 export type ScreenShareSettings = {
   resolution: 720 | 1080 | 1440;
   frameRate: 30 | 60;
@@ -122,7 +115,6 @@ export class VoiceClient {
 
   // Audio level monitoring
   private audioContext: AudioContext | null = null;
-  private limiterNode: DynamicsCompressorNode | null = null;
   private analysers = new Map<string, AnalyserNode>(); // username -> analyser
   private userLevels = new Map<string, number>(); // username -> smoothed level 0..1
   private producerUsernames = new Map<string, string>(); // producerId -> username
@@ -152,36 +144,12 @@ export class VoiceClient {
   private userMutedState = new Map<string, boolean>(); // username -> muted
   private userGainNodes = new Map<string, GainNode>(); // username -> receive gain
   private trackPumpers = new Map<string, HTMLAudioElement>(); // muted <audio> per user that keeps WebRTC tracks flowing into Web Audio
-  // Per-peer LUFS normalization state.
-  private loudnessNodes = new Map<string, AudioWorkletNode>(); // username -> BS.1770 worklet
-  private normalizationFactors = new Map<string, number>(); // username -> 0.25..4.0 gain multiplier
-  private loudnessWorkletPromise: Promise<void> | null = null;
   // RNNoise state. Lazy-loaded on first mic graph build; cached thereafter.
   private rnnoiseEnabled = true;
   private rnnoiseNode: RnnoiseWorkletNodeType | null = null;
   private rnnoiseWasmBinary: ArrayBuffer | null = null;
   private rnnoiseWorkletPromise: Promise<void> | null = null;
   private masterGainNode: GainNode | null = null;
-  // Tap off the peer-voice mix (post-master, same signal the speakers play)
-  // so startScreenShare can cancel it out of the system loopback capture —
-  // viewers don't hear themselves echoed through the shared screen audio.
-  // See buildAecTrack() for the NLMS filter that does the actual cancellation.
-  private voiceMixDest: MediaStreamAudioDestinationNode | null = null;
-  private aecWorkletPromise: Promise<void> | null = null;
-  private aecNodes: AudioNode[] = [];
-  private aecStream: MediaStream | null = null;
-  // Coarse-delay alignment: the system loopback round-trip (50–250 ms) usually
-  // exceeds the NLMS tap window (2048 samples = 42 ms at 48 kHz). A DelayNode
-  // on the reference path shifts the reference to line up with the actual
-  // echo, leaving the filter free to model just the residual tail.
-  private aecRefDelay: DelayNode | null = null;
-  private aecMeasureNodes: AudioNode[] = [];
-  private aecRefBuffer: Float32Array | null = null;
-  private aecCapBuffer: Float32Array | null = null;
-  private aecBufferWrite = 0;
-  private aecBufferFilled = 0;
-  private aecLastMeasure = 0;
-  private normalizeVoices = true;
   private eqEnabled = false;
   private eqBands: { gain: number; q: number }[] = EQ_FREQS.map(() => ({ gain: 0, q: 1 }));
   private eqNodes: BiquadFilterNode[] = [];
@@ -202,10 +170,6 @@ export class VoiceClient {
     else if (storedMode === 'manual') this.vadMode = 'auto';
     this.pttEnabled = localStorage.getItem('pttEnabled') === 'true';
     this.pttKey = localStorage.getItem('pttKey') ?? '';
-    // Default ON when no stored value — existing users who explicitly turned
-    // normalization off keep their preference.
-    const storedNormalize = localStorage.getItem('normalizeVoices');
-    this.normalizeVoices = storedNormalize === null ? true : storedNormalize === 'true';
     const storedRnnoise = localStorage.getItem('rnnoiseEnabled');
     this.rnnoiseEnabled = storedRnnoise === null ? true : storedRnnoise === 'true';
     this.eqEnabled = localStorage.getItem('micEqEnabled') === 'true';
@@ -293,49 +257,14 @@ export class VoiceClient {
       }
 
       // Shared receive graph: every remote mic feeds one GainNode per user
-      // whose gain is driven by per-peer LUFS measurement when normalization
-      // is enabled (see consumeProducer / updateNormalizationFactor). All
-      // per-peer gains sum into masterGain, then pass through a brickwall
-      // limiter before hitting the destination.
-      //
-      // Final output goes through audioContext.destination — avoiding an
-      // <audio> element here is deliberate: Chrome's tab-audio capture
-      // (getDisplayMedia with audio: true) includes DOM-attached media
-      // elements before setSinkId routing, so an <audio> sink would leak
-      // the received voice back into our own screen-share audio.
+      // (driven by the dB volume slider), summing into masterGain and out
+      // to the destination. Avoiding an <audio> element here is deliberate:
+      // Chrome's tab-audio capture (getDisplayMedia with audio: true)
+      // includes DOM-attached media elements before setSinkId routing, so
+      // an <audio> sink would leak the received voice into screen-share.
       this.masterGainNode = this.audioContext.createGain();
       this.masterGainNode.gain.value = 1; // deafen sets to 0
-      // Brickwall limiter on the master bus. With per-peer LUFS gains
-      // clamped to [0.25, 4.0] and per-user volume sliders on top, summed
-      // peaks can still overshoot ±1.0 — the limiter keeps the destination
-      // honest without audible pumping on single-speaker content.
-      this.limiterNode = this.audioContext.createDynamicsCompressor();
-      this.limiterNode.threshold.value = -1;
-      this.limiterNode.knee.value = 0;
-      this.limiterNode.ratio.value = 20;
-      this.limiterNode.attack.value = 0.001;
-      this.limiterNode.release.value = 0.05;
-      this.masterGainNode.connect(this.limiterNode);
-      this.limiterNode.connect(this.audioContext.destination);
-
-      // LUFS worklet module load — shared across every per-peer instance
-      // created in consumeProducer. Dynamic import so this file can be
-      // evaluated under SSR (loudness-worklet subclasses AudioWorkletNode
-      // at module top level, which Node doesn't have).
-      const ctx = this.audioContext;
-      this.loudnessWorkletPromise = (async () => {
-        try {
-          const { LoudnessWorkletNode } = await import('loudness-worklet');
-          await LoudnessWorkletNode.loadModule(ctx);
-        } catch {
-          // Non-fatal: per-peer normalization falls back to unity gain.
-        }
-      })();
-      // Second output branch: peer-voice mix as a MediaStream. Used only
-      // while screen-sharing with audio to subtract our own received voices
-      // from the loopback capture (mix-minus).
-      this.voiceMixDest = this.audioContext.createMediaStreamDestination();
-      this.masterGainNode.connect(this.voiceMixDest);
+      this.masterGainNode.connect(this.audioContext.destination);
 
       // Route the AudioContext itself to the user's chosen output device.
       // Chrome 110+ / Electron 35 supports AudioContext.setSinkId; older
@@ -517,8 +446,7 @@ export class VoiceClient {
     }
 
     // Route received mic audio through the per-peer graph. One source feeds
-    // the per-user GainNode, a BS.1770 loudness meter (for normalization),
-    // and an analyser (for the speaking indicator).
+    // the per-user GainNode and an analyser (for the speaking indicator).
     if (remoteUsername && this.audioContext && this.masterGainNode) {
       // Chromium won't deliver audio from a WebRTC-sourced track into
       // createMediaStreamSource unless an <audio> element is actively
@@ -538,30 +466,6 @@ export class VoiceClient {
       gainNode.connect(this.masterGainNode);
       this.applyUserGain(remoteUsername);
 
-      // Per-peer LUFS meter. Independent per-peer measurement means one
-      // loud peer can't duck everyone else the way the old shared
-      // compressor did. The meter runs in parallel with playback — it
-      // only reads; output still flows gainNode → masterGain.
-      if (this.loudnessWorkletPromise) {
-        const captureUsername = remoteUsername;
-        this.loudnessWorkletPromise
-          .then(() => import('loudness-worklet'))
-          .then(({ LoudnessWorkletNode }) => {
-            if (!this.audioContext || this.userGainNodes.get(captureUsername) !== gainNode) return;
-            try {
-              const meter = new LoudnessWorkletNode(this.audioContext, {
-                processorOptions: { interval: 0.4, capacity: 10 },
-              });
-              meter.port.onmessage = (event) => this.onLoudnessMessage(captureUsername, event.data);
-              trackSource.connect(meter);
-              this.loudnessNodes.set(captureUsername, meter);
-            } catch {
-              // Non-fatal: peer plays at unity normalization gain.
-            }
-          })
-          .catch(() => {});
-      }
-
       // Analyser tap for the speaking indicator, post per-peer gain so
       // boosting a quiet peer also boosts their indicator intensity.
       const analyser = this.audioContext.createAnalyser();
@@ -571,38 +475,13 @@ export class VoiceClient {
     }
   }
 
-  // Consume one LUFS snapshot from the per-peer worklet. We read the most
-  // recent short-term loudness value and, when it's meaningful, nudge that
-  // peer's normalization factor toward the gain that would put them at
-  // LUFS_TARGET. The actual GainNode update is smoothed by applyUserGain
-  // below (a setTargetAtTime ramp, not a step).
-  private onLoudnessMessage(username: string, data: any) {
-    if (!this.normalizeVoices) return;
-    const ms: Array<{ shortTermLoudness: number }> | undefined = data?.currentMeasurements;
-    if (!ms || ms.length === 0) return;
-    const last = ms[ms.length - 1];
-    const lufs = last?.shortTermLoudness;
-    // BS.1770 returns −Infinity / very negative values for silence; ignore.
-    if (!Number.isFinite(lufs) || lufs < -60) return;
-    const rawFactor = Math.pow(10, (LUFS_TARGET - lufs) / 20);
-    const clamped = Math.max(LUFS_GAIN_MIN, Math.min(LUFS_GAIN_MAX, rawFactor));
-    const prev = this.normalizationFactors.get(username) ?? 1;
-    // Slew limit — blend 25 % of the new estimate per 400 ms tick so the
-    // factor settles over a few seconds without pumping.
-    const next = prev * 0.75 + clamped * 0.25;
-    this.normalizationFactors.set(username, next);
-    this.applyUserGain(username);
-  }
-
   private applyUserGain(username: string) {
     const node = this.userGainNodes.get(username);
     if (!node || !this.audioContext) return;
     const muted = this.userMutedState.get(username) ?? false;
     const base = this.userBaseVolumes.get(username) ?? 1;
-    const norm = this.normalizeVoices ? (this.normalizationFactors.get(username) ?? 1) : 1;
-    const target = muted ? 0 : base * this.speakerGain * norm;
-    // Smooth ramp instead of a step avoids zipper noise when the LUFS
-    // estimate updates and keeps manual volume-slider drags glitch-free.
+    const target = muted ? 0 : base * this.speakerGain;
+    // Smooth ramp keeps manual volume-slider drags glitch-free.
     try {
       node.gain.cancelScheduledValues(this.audioContext.currentTime);
       node.gain.setTargetAtTime(target, this.audioContext.currentTime, 0.05);
@@ -653,324 +532,6 @@ export class VoiceClient {
 
     if (username) this.producerUsernames.delete(producerId);
     this.producerSources.delete(producerId);
-  }
-
-  // NLMS adaptive filter in an AudioWorklet. Reference = peer voice mix
-  // (pre-speaker, same signal we play). Capture = system loopback track
-  // from getDisplayMedia. The filter learns the full impulse response
-  // (delay + per-app volume + any frequency shaping) from reference to
-  // capture, and emits capture − filtered(reference). Handles what the
-  // old single-tap "delay + invert + scale" approach couldn't: loopback
-  // paths with non-trivial frequency response, and the slow/unreliable
-  // convergence of a cross-correlation latency seeker.
-  //
-  // 2048 taps at 48 kHz = ~43 ms of impulse response. The bulk round-trip
-  // delay (30–250 ms) is absorbed by a separately-driven DelayNode on the
-  // reference path; the filter's taps need only cover the residual tail.
-  //
-  // Runs inside AudioWorkletGlobalScope — no closures over outer scope,
-  // no imports. If any of that changes, the source must remain a plain
-  // string because AudioWorklet modules load as separate scripts.
-  private static readonly AEC_WORKLET_SOURCE = `
-class NlmsAec extends AudioWorkletProcessor {
-  constructor(opts) {
-    super();
-    const N = (opts && opts.processorOptions && opts.processorOptions.N) || 1024;
-    this.N = N;
-    this.buf = new Float32Array(N);
-    this.w = new Float32Array(N);
-    this.widx = 0;
-    this.refEnergy = 0;
-    this.mu = 0.15;
-    this.eps = 1e-6;
-    // Weight leakage per sample. Prevents unbounded growth when the
-    // filter sees signal it can't explain (game audio, mic bleed, etc.).
-    // 1 - 1e-5 → weights decay to half over ~70k samples (~1.5s) if the
-    // reference ever goes fully silent or uncorrelated with capture.
-    this.leak = 1 - 1e-5;
-    // Reference energy threshold below which we freeze adaptation.
-    // Without this, NLMS tries to fit uncorrelated capture to residual
-    // reference noise — weights grow and the "cancelled" output ends up
-    // amplifying game audio to painful levels. Units: sum-of-squares
-    // across the N-sample buffer. N * 1e-5 → ~ -40 dBFS.
-    this.refThresh = N * 1e-5;
-  }
-  process(inputs, outputs) {
-    const ref = inputs[0] && inputs[0][0];
-    const cap = inputs[1] && inputs[1][0];
-    const out = outputs[0] && outputs[0][0];
-    if (!out) return true;
-    const len = out.length;
-    if (!cap) { for (let i = 0; i < len; i++) out[i] = 0; return true; }
-    // No reference available: pass capture through untouched. Never amplify.
-    if (!ref) { for (let i = 0; i < len; i++) out[i] = cap[i]; return true; }
-    const N = this.N;
-    const buf = this.buf;
-    const w = this.w;
-    let widx = this.widx;
-    let refE = this.refEnergy;
-    const leak = this.leak;
-    const thresh = this.refThresh;
-    const mu = this.mu;
-    const eps = this.eps;
-
-    for (let n = 0; n < len; n++) {
-      const x = ref[n];
-      const oldX = buf[widx];
-      refE += x * x - oldX * oldX;
-      if (refE < 0) refE = 0;
-      buf[widx] = x;
-
-      // FIR: y = sum(w[i] * buf[widx - i])
-      let y = 0;
-      let j = widx;
-      for (let i = 0; i < N; i++) {
-        y += w[i] * buf[j];
-        j = (j === 0) ? N - 1 : j - 1;
-      }
-
-      const c = cap[n];
-      let e = c - y;
-
-      // Divergence guard. If the filter predicts something much larger
-      // than capture, the cancelled signal becomes louder than the
-      // original — painful for viewers. Clamp to capture in that case
-      // and let leakage bleed the offending weights down.
-      if (Math.abs(e) > 2 * Math.abs(c) + 0.02) e = c;
-      out[n] = e;
-
-      // Adapt weights only when the reference is non-trivial. Freezing
-      // during double-talk / reference silence is what prevents the
-      // amplify-random-audio failure mode.
-      if (refE > thresh) {
-        const step = mu / (refE + eps);
-        j = widx;
-        for (let i = 0; i < N; i++) {
-          w[i] = leak * w[i] + step * e * buf[j];
-          j = (j === 0) ? N - 1 : j - 1;
-        }
-      } else {
-        // Reference quiet — leak weights toward zero so a stale learned
-        // filter doesn't keep colouring the capture after peers stopped.
-        for (let i = 0; i < N; i++) w[i] *= leak;
-      }
-
-      widx = (widx + 1) % N;
-    }
-
-    this.widx = widx;
-    this.refEnergy = refE;
-    return true;
-  }
-}
-registerProcessor('nlms-aec', NlmsAec);
-`;
-
-  // Worklet registration is async and required before the AudioWorkletNode
-  // can be constructed. Cached on first build so subsequent screen shares
-  // don't re-register.
-  private ensureAecWorklet(): Promise<void> {
-    if (this.aecWorkletPromise) return this.aecWorkletPromise;
-    const ctx = this.audioContext;
-    if (!ctx) return Promise.reject(new Error('AudioContext not initialized'));
-    const blob = new Blob([VoiceClient.AEC_WORKLET_SOURCE], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-    this.aecWorkletPromise = ctx.audioWorklet.addModule(url).finally(() => {
-      URL.revokeObjectURL(url);
-    });
-    return this.aecWorkletPromise;
-  }
-
-  private async buildAecTrack(loopbackTrack: MediaStreamTrack): Promise<MediaStreamTrack | null> {
-    const ctx = this.audioContext;
-    const voiceMix = this.voiceMixDest;
-    if (!ctx || !voiceMix) return null;
-    try {
-      await this.ensureAecWorklet();
-      this.tearDownAec();
-      const loopbackSource = ctx.createMediaStreamSource(new MediaStream([loopbackTrack]));
-      const voiceSource = ctx.createMediaStreamSource(voiceMix.stream);
-      // DelayNode on the reference path. Coarse delay estimator will set
-      // this to roughly the measured loopback round-trip minus a small
-      // safety margin, so the filter's 2048 taps land on the echo tail
-      // instead of being consumed by the bulk delay.
-      const refDelay = ctx.createDelay(0.5);
-      refDelay.delayTime.value = 0;
-      const aec = new AudioWorkletNode(ctx, 'nlms-aec', {
-        numberOfInputs: 2,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-        processorOptions: { N: 2048 },
-      });
-      const dest = ctx.createMediaStreamDestination();
-      voiceSource.connect(refDelay);
-      refDelay.connect(aec, 0, 0);
-      loopbackSource.connect(aec, 0, 1);
-      aec.connect(dest);
-      const outTrack = dest.stream.getAudioTracks()[0];
-      if (!outTrack) return null;
-      this.aecRefDelay = refDelay;
-      this.aecNodes = [loopbackSource, voiceSource, refDelay, aec, dest];
-      this.aecStream = dest.stream;
-      this.installAecDelayMeasurer(voiceSource, loopbackSource);
-      return outTrack;
-    } catch {
-      this.tearDownAec();
-      return null;
-    }
-  }
-
-  // Coarse cross-correlation delay estimator. Taps the same reference and
-  // loopback streams the NLMS worklet uses, writes them into ring buffers,
-  // and periodically correlates to find the round-trip delay. Runs only
-  // when the reference has meaningful energy (peers talking) — correlating
-  // silence yields random peaks.
-  private installAecDelayMeasurer(voiceSource: AudioNode, loopbackSource: AudioNode) {
-    const ctx = this.audioContext;
-    if (!ctx) return;
-    try {
-      const BUFFER_SAMPLES = Math.round(ctx.sampleRate * 0.5); // 500 ms window
-      this.aecRefBuffer = new Float32Array(BUFFER_SAMPLES);
-      this.aecCapBuffer = new Float32Array(BUFFER_SAMPLES);
-      this.aecBufferWrite = 0;
-      this.aecBufferFilled = 0;
-      this.aecLastMeasure = 0;
-
-      // ChannelMerger feeds both signals into one ScriptProcessor so
-      // writes into the ring buffers stay sample-aligned.
-      const merger = ctx.createChannelMerger(2);
-      voiceSource.connect(merger, 0, 0);
-      loopbackSource.connect(merger, 0, 1);
-      // ScriptProcessor is deprecated but fine here: the per-block work
-      // is a plain ring-buffer copy. Correlation runs off-thread via
-      // queueMicrotask so it never blocks the audio callback.
-      const proc = ctx.createScriptProcessor(4096, 2, 1);
-      merger.connect(proc);
-      // ScriptProcessor must connect to a live destination to pump.
-      const silent = ctx.createGain();
-      silent.gain.value = 0;
-      proc.connect(silent);
-      silent.connect(ctx.destination);
-
-      proc.onaudioprocess = (event) => {
-        const ref = event.inputBuffer.getChannelData(0);
-        const cap = event.inputBuffer.getChannelData(1);
-        const refBuf = this.aecRefBuffer;
-        const capBuf = this.aecCapBuffer;
-        if (!refBuf || !capBuf) return;
-        const size = refBuf.length;
-        let w = this.aecBufferWrite;
-        for (let i = 0; i < ref.length; i++) {
-          refBuf[w] = ref[i];
-          capBuf[w] = cap[i];
-          w = w + 1;
-          if (w >= size) w = 0;
-        }
-        this.aecBufferWrite = w;
-        this.aecBufferFilled = Math.min(this.aecBufferFilled + ref.length, size);
-
-        const now = performance.now();
-        if (this.aecBufferFilled >= size && now - this.aecLastMeasure > 2000) {
-          this.aecLastMeasure = now;
-          queueMicrotask(() => this.runAecDelayCorrelation());
-        }
-      };
-
-      this.aecMeasureNodes = [merger, proc, silent];
-    } catch {
-      // Measurer failure is non-fatal; NLMS still runs at delayTime = 0.
-    }
-  }
-
-  private runAecDelayCorrelation() {
-    const ctx = this.audioContext;
-    const ref = this.aecRefBuffer;
-    const cap = this.aecCapBuffer;
-    const delayNode = this.aecRefDelay;
-    if (!ctx || !ref || !cap || !delayNode) return;
-    const size = ref.length;
-    const sr = ctx.sampleRate;
-    const write = this.aecBufferWrite;
-
-    // Linearize the ring buffers so indexing matches time order.
-    const lin = (src: Float32Array) => {
-      const out = new Float32Array(size);
-      const tailLen = size - write;
-      out.set(src.subarray(write), 0);
-      out.set(src.subarray(0, write), tailLen);
-      return out;
-    };
-    const refLin = lin(ref);
-    const capLin = lin(cap);
-
-    // Energy gate: correlating silence produces random peaks that would
-    // jitter the DelayNode for no gain.
-    const gateWin = Math.min(size, Math.round(0.1 * sr));
-    let rmsSq = 0;
-    for (let i = size - gateWin; i < size; i++) rmsSq += refLin[i] * refLin[i];
-    const rms = Math.sqrt(rmsSq / gateWin);
-    if (rms < 0.005) return;
-
-    // 100 ms correlation window against lags from 0 to 300 ms. Capture is
-    // always delayed relative to reference, so we only search positive lag.
-    const winSize = Math.round(0.1 * sr);
-    const winStart = size - winSize;
-    const minLag = 0;
-    const maxLag = Math.min(winStart, Math.round(0.3 * sr));
-
-    let bestLag = minLag;
-    let bestCorr = -Infinity;
-    let sumAbsCorr = 0;
-    let samples = 0;
-    for (let lag = minLag; lag <= maxLag; lag++) {
-      const capStart = winStart - lag;
-      let sum = 0;
-      for (let j = 0; j < winSize; j++) {
-        sum += refLin[winStart + j] * capLin[capStart + j];
-      }
-      sumAbsCorr += Math.abs(sum);
-      samples++;
-      if (sum > bestCorr) {
-        bestCorr = sum;
-        bestLag = lag;
-      }
-    }
-
-    // Require the peak to stand clearly above the average absolute
-    // correlation; otherwise we're fitting to noise.
-    const meanAbs = samples > 0 ? sumAbsCorr / samples : 0;
-    if (bestCorr < meanAbs * 4) return;
-
-    // Measured lag = how much capture trails reference. Delay the reference
-    // by (lag − safety) so the filter's taps start slightly ahead of the
-    // echo onset and cover its tail.
-    const measuredSec = bestLag / sr;
-    const safetyMarginSec = 0.010; // 10 ms headroom for taps to pick up pre-echo
-    const delaySec = Math.max(0, measuredSec - safetyMarginSec);
-    try {
-      delayNode.delayTime.cancelScheduledValues(ctx.currentTime);
-      // Smooth ramp prevents a pitch wobble on whatever reference content
-      // is currently being subtracted.
-      delayNode.delayTime.setTargetAtTime(delaySec, ctx.currentTime, 0.25);
-    } catch {}
-  }
-
-  private tearDownAec() {
-    for (const n of this.aecNodes) { try { n.disconnect(); } catch {} }
-    this.aecNodes = [];
-    for (const n of this.aecMeasureNodes) {
-      try { (n as ScriptProcessorNode).onaudioprocess = null as any; } catch {}
-      try { n.disconnect(); } catch {}
-    }
-    this.aecMeasureNodes = [];
-    this.aecRefDelay = null;
-    this.aecRefBuffer = null;
-    this.aecCapBuffer = null;
-    this.aecBufferWrite = 0;
-    this.aecBufferFilled = 0;
-    this.aecLastMeasure = 0;
-    this.aecStream?.getTracks().forEach((t) => t.stop());
-    this.aecStream = null;
   }
 
   // Load RNNoise WASM + worklet module once per AudioContext, cache the
@@ -1286,30 +847,22 @@ registerProcessor('nlms-aec', NlmsAec);
     });
 
     // Produce screen audio if the user shared a tab/window with audio.
-    // Run it through an NLMS adaptive filter that cancels our own received
-    // peer voices out of the loopback so viewers don't hear themselves in
-    // the screen-share audio. See `voiceMixDest` for the tap point.
+    // Sent raw — no userspace echo cancellation. Viewers on speakers will
+    // hear themselves echo back; headphones avoid that loop entirely.
     const audioTrack = this.screenStream.getAudioTracks()[0];
     if (audioTrack) {
-      // If AEC graph can't be built (no AudioWorklet support, audio context
-      // closed), skip producing screen audio rather than sending raw
-      // uncancelled loopback — the raw fallback guarantees peers hear
-      // themselves.
-      const outgoingTrack = await this.buildAecTrack(audioTrack);
-      if (outgoingTrack) {
-        // Screen audio is typically music/game audio — opposite profile to mic.
-        // Stereo on, DTX off (continuous content), higher bitrate for fidelity.
-        this.screenAudioProducer = await this.sendTransport.produce({
-          track: outgoingTrack,
-          appData: { source: 'screen-audio' },
-          codecOptions: {
-            opusStereo: true,
-            opusDtx: false,
-            opusFec: true,
-            opusMaxAverageBitrate: 128000,
-          },
-        });
-      }
+      // Screen audio is typically music/game audio — opposite profile to mic.
+      // Stereo on, DTX off (continuous content), higher bitrate for fidelity.
+      this.screenAudioProducer = await this.sendTransport.produce({
+        track: audioTrack,
+        appData: { source: 'screen-audio' },
+        codecOptions: {
+          opusStereo: true,
+          opusDtx: false,
+          opusFec: true,
+          opusMaxAverageBitrate: 128000,
+        },
+      });
     }
 
     if (this.localUsername) {
@@ -1338,7 +891,6 @@ registerProcessor('nlms-aec', NlmsAec);
 
     this.screenStream?.getTracks().forEach((t) => t.stop());
     this.screenStream = null;
-    this.tearDownAec();
 
     if (this.localUsername) {
       this.handlers.onScreenTrack(this.localUsername, null);
@@ -1388,18 +940,8 @@ registerProcessor('nlms-aec', NlmsAec);
     this.trackPumpers.clear();
     this.userBaseVolumes.clear();
     this.userMutedState.clear();
-    this.tearDownAec();
-    this.aecWorkletPromise = null;
-    this.voiceMixDest?.disconnect();
-    this.voiceMixDest = null;
-    this.loudnessNodes.forEach((n) => { try { n.disconnect(); } catch {} });
-    this.loudnessNodes.clear();
-    this.normalizationFactors.clear();
-    this.loudnessWorkletPromise = null;
     this.masterGainNode?.disconnect();
     this.masterGainNode = null;
-    this.limiterNode?.disconnect();
-    this.limiterNode = null;
     // Stop Silero before releasing the mic stream so destroy() doesn't fire
     // callbacks into a half-torn-down graph.
     if (this.micVAD) { try { await this.micVAD.destroy(); } catch {} }
@@ -1503,17 +1045,6 @@ registerProcessor('nlms-aec', NlmsAec);
   setSpeakerGain(gain: number) {
     this.speakerGain = gain;
     localStorage.setItem('speakerGain', String(gain));
-    for (const username of this.userGainNodes.keys()) {
-      this.applyUserGain(username);
-    }
-  }
-
-  setNormalizeVoices(enabled: boolean) {
-    this.normalizeVoices = enabled;
-    localStorage.setItem('normalizeVoices', String(enabled));
-    // When turning off, clear accumulated factors so turning back on
-    // starts fresh at unity and ramps up via the next few LUFS updates.
-    if (!enabled) this.normalizationFactors.clear();
     for (const username of this.userGainNodes.keys()) {
       this.applyUserGain(username);
     }

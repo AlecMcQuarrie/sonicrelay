@@ -165,7 +165,6 @@ const SETTING_VALIDATORS: Record<string, (v: unknown) => unknown | undefined> = 
   vadMode: (v) => v === 'off' || v === 'auto' ? v : v === 'manual' ? 'auto' : undefined,
   pttEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   pttKey: (v) => typeof v === 'string' && v.length <= 32 ? v : undefined,
-  normalizeVoices: (v) => typeof v === 'boolean' ? v : undefined,
   rnnoiseEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   micEqEnabled: (v) => typeof v === 'boolean' ? v : undefined,
   micEqBands: (v) => {
