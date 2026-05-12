@@ -106,7 +106,16 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const voiceRef = useRef<VoiceClient | null>(null);
   const rcClientRef = useRef<RemoteControlClient | null>(null);
   const [rcSession, setRcSession] = useState<RemoteControlSession | null>(null);
+  const [rcPaused, setRcPaused] = useState(false);
   const [rcPendingRequest, setRcPendingRequest] = useState<string | null>(null);
+  // The sharer we have an outstanding request to (controller-side). Used to
+  // disable the Request button while a request is in-flight, so a click can't
+  // queue duplicates against the server's per-pair dedup.
+  const [rcOutgoingRequestTo, setRcOutgoingRequestTo] = useState<string | null>(null);
+  // Map of sharer → "does this sharer allow remote-control requests" (set
+  // from server-broadcast rc-state updates). Controllers gate the Request
+  // Control button on this; absence defaults to true (graceful fallback).
+  const [rcSharerStates, setRcSharerStates] = useState<Record<string, boolean>>({});
   const voicePeerSettingsRef = useRef(voicePeerSettings);
   voicePeerSettingsRef.current = voicePeerSettings;
   const screenAudioPeerSettingsRef = useRef(screenAudioPeerSettings);
@@ -462,11 +471,28 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         },
         onSessionChange: (session) => {
           setRcSession(session);
+          if (!session) setRcPaused(false);
+          // Request resolved (granted) — re-enable the Request button for that sharer.
+          if (session?.role === 'controller') {
+            setRcOutgoingRequestTo((prev) => prev === session.sharerUsername ? null : prev);
+          }
+        },
+        onPauseChange: (paused) => {
+          setRcPaused(paused);
+        },
+        onSharerRcStateChange: (sharer, enabled) => {
+          setRcSharerStates((prev) => ({ ...prev, [sharer]: enabled }));
         },
         onRequestDenied: (sharer) => {
+          setRcOutgoingRequestTo((prev) => prev === sharer ? null : prev);
           window.electronAPI?.showNotification('Request denied', `${sharer} denied your control request.`);
         },
         onError: (message) => {
+          // A server-side rejection (e.g., target offline) clears our local
+          // pending so the user can retry. The "already pending" rejection
+          // intentionally keeps it set — that error means the previous
+          // request is still alive on the server.
+          if (!/already.*pending/i.test(message)) setRcOutgoingRequestTo(null);
           console.warn('[remote-control]', message);
         },
       });
@@ -828,6 +854,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   }, []);
 
   const requestRemoteControl = useCallback((sharerUsername: string) => {
+    setRcOutgoingRequestTo(sharerUsername);
     rcClientRef.current?.requestControl(sharerUsername);
   }, []);
 
@@ -1080,7 +1107,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       style={{ display: isActive ? "flex" : "none" }}
     >
       {isActive && (
-        <ActiveSessionBanner session={rcSession} onStop={releaseRemoteControl} />
+        <ActiveSessionBanner session={rcSession} paused={rcPaused} onStop={releaseRemoteControl} />
       )}
       {isActive && (
         <GrantRequestDialog
@@ -1190,6 +1217,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
                 onSendInput={sendRemoteInput}
                 onReleaseControl={releaseRemoteControl}
                 onRequestControl={requestRemoteControl}
+                pendingRequestTo={rcOutgoingRequestTo}
+                sharerRcStates={rcSharerStates}
               />
             );
           })()}

@@ -14,7 +14,7 @@ import dmRoutes from './routes/dm';
 import uploadRoutes from './routes/uploads';
 import readStatusRoutes from './routes/read-status';
 import serverInfoRoutes from './routes/server-info';
-import { handleRemoteControlMessage, revokeSessionsFor } from './routes/remote-control';
+import { handleRemoteControlMessage, revokeSessionsFor, sendRcStateSnapshot } from './routes/remote-control';
 import { loadServerConfig } from './config';
 
 const jwt = require("jsonwebtoken");
@@ -405,6 +405,7 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
               type: 'voice-notification', action: 'peer-joined',
               channelId: msg.channelId, username,
             });
+            sendRcStateSnapshot(ws, msg.channelId);
             break;
           }
           case 'create-transport': {

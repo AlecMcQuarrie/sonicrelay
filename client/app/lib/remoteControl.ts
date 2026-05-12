@@ -31,6 +31,13 @@ export type RemoteControlHandlers = {
   onSessionChange: (session: RemoteControlSession | null) => void;
   // Fired on the requester when the sharer explicitly denies.
   onRequestDenied: (sharerUsername: string) => void;
+  // Fired on both parties when the sharer's takeover safeguard pauses or
+  // resumes injection mid-session. The session stays alive throughout.
+  onPauseChange: (paused: boolean) => void;
+  // Fired on controllers when a sharer in their voice channel changes
+  // whether they allow remote-control requests. Used to keep the Request
+  // Control button's enabled state in sync with the sharer's choice.
+  onSharerRcStateChange: (sharerUsername: string, enabled: boolean) => void;
   // Non-fatal errors worth surfacing (e.g. "target offline").
   onError: (message: string) => void;
 };
@@ -72,6 +79,13 @@ export class RemoteControlClient {
   private session: RemoteControlSession | null = null;
   private notificationHandler: (event: MessageEvent) => void;
   private unsubscribeElectron: (() => void) | null = null;
+  private unsubscribePause: (() => void) | null = null;
+  private unsubscribeResume: (() => void) | null = null;
+  private unsubscribeShareAuth: (() => void) | null = null;
+  // Tracks each sharer's published "remote control enabled" state, learned
+  // from server-broadcast `rc-state-update` notifications. Defaults to true
+  // for unknown sharers (graceful fallback if the broadcast was missed).
+  private sharerRcAllowed: Map<string, boolean> = new Map();
 
   constructor(ws: WebSocket, localUsername: string, handlers: RemoteControlHandlers) {
     this.ws = ws;
@@ -92,6 +106,51 @@ export class RemoteControlClient {
         this.revoke('helper-disarmed').catch(() => {});
       }
     }) ?? null;
+
+    // Takeover pause notifications — fire local handler and relay to the
+    // controller via WebSocket so their banner can mirror the state.
+    this.unsubscribePause = window.electronAPI?.remoteControl.onInjectionPaused(() => {
+      this.handlers.onPauseChange(true);
+      this.broadcastPauseState(true);
+    }) ?? null;
+    this.unsubscribeResume = window.electronAPI?.remoteControl.onInjectionResumed(() => {
+      this.handlers.onPauseChange(false);
+      this.broadcastPauseState(false);
+    }) ?? null;
+
+    // The sharer's source-picker choice arrives once per share. Push it to
+    // the server so the channel learns whether requests are even allowed.
+    this.unsubscribeShareAuth = window.electronAPI?.onShareAuth?.((allowControl) => {
+      this.publishRcAllowed(allowControl);
+    }) ?? null;
+  }
+
+  // Sharer-side: publish whether others can request control of this share.
+  // Server stores per-user and broadcasts to voice channel members.
+  publishRcAllowed(enabled: boolean): void {
+    if (this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({
+      type: 'remote-control',
+      action: 'set-rc-state',
+      enabled,
+    }));
+  }
+
+  // Controller-side: lookup whether a given sharer currently allows requests.
+  // Defaults to true if we haven't received a state update yet — the server
+  // will reject the actual request anyway if the sharer has it off.
+  sharerAllowsRemoteControl(sharerUsername: string): boolean {
+    return this.sharerRcAllowed.get(sharerUsername) ?? true;
+  }
+
+  private broadcastPauseState(paused: boolean): void {
+    const session = this.session;
+    if (!session || session.role !== 'sharer') return;
+    if (this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({
+      type: 'remote-control', action: 'pause-state',
+      sessionId: session.sessionId, paused,
+    }));
   }
 
   private async handleNotification(msg: any) {
@@ -100,6 +159,16 @@ export class RemoteControlClient {
         if (typeof msg.requesterUsername === 'string') {
           this.handlers.onIncomingRequest(msg.requesterUsername);
         }
+        return;
+      }
+      case 'rc-state-update': {
+        // Server is telling us a sharer in our voice channel flipped their
+        // "allow remote control" toggle. Update the cache so the Request
+        // Control button can disable itself for that tile.
+        if (typeof msg.sharerUsername !== 'string') return;
+        const enabled = !!msg.enabled;
+        this.sharerRcAllowed.set(msg.sharerUsername, enabled);
+        this.handlers.onSharerRcStateChange(msg.sharerUsername, enabled);
         return;
       }
       case 'control-granted': {
@@ -144,6 +213,14 @@ export class RemoteControlClient {
         if (this.session?.role !== 'sharer') return;
         if (msg.sessionId !== this.session.sessionId) return;
         window.electronAPI?.remoteControl.injectInput(msg.sessionId, msg.event);
+        return;
+      }
+      case 'pause-state': {
+        // Controller-only path — sharer is telling us their physical mouse
+        // activity has paused (or resumed) injection.
+        if (this.session?.role !== 'controller') return;
+        if (msg.sessionId !== this.session.sessionId) return;
+        this.handlers.onPauseChange(!!msg.paused);
         return;
       }
     }
@@ -195,11 +272,13 @@ export class RemoteControlClient {
   }
 
   // Called by Server.tsx when the sharer stops screen sharing. Clears main-
-  // process state so a later arm-session can't inherit stale display bounds.
+  // process state so a later arm-session can't inherit stale display bounds,
+  // and tells the channel that requests are no longer accepted.
   screenShareStopped(): void {
     if (this.session?.role === 'sharer') {
       this.revoke('share-ended').catch(() => {});
     }
+    this.publishRcAllowed(false);
     window.electronAPI?.remoteControl.clearSharedDisplay().catch(() => {});
   }
 
@@ -210,6 +289,9 @@ export class RemoteControlClient {
   destroy(): void {
     this.ws.removeEventListener('message', this.notificationHandler);
     this.unsubscribeElectron?.();
+    this.unsubscribePause?.();
+    this.unsubscribeResume?.();
+    this.unsubscribeShareAuth?.();
     if (this.session?.role === 'sharer') {
       window.electronAPI?.remoteControl.disarmSession().catch(() => {});
     }

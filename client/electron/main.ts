@@ -129,7 +129,18 @@ type ActiveSession = {
   heldKeys: Set<string>;
   windowStart: number;
   eventsInWindow: number;
+  // Takeover detection — when the sharer physically moves their mouse, the OS
+  // cursor diverges from where we last placed it. We pause injection (without
+  // tearing down the session) until they've been still for IDLE_RESUME_MS.
+  lastInjectedPos: { x: number; y: number } | null;
+  lastUserActivityAt: number;
+  paused: boolean;
+  pauseMonitor: NodeJS.Timeout | null;
+  lastPolledPos: { x: number; y: number } | null;
 };
+
+const TAKEOVER_THRESHOLD_PX = 5;
+const IDLE_RESUME_MS = 2000;
 
 let activeSession: ActiveSession | null = null;
 let sharedDisplayBounds: DisplayBounds | null = null;
@@ -192,6 +203,7 @@ async function disarmSession() {
   if (!activeSession) return;
   const session = activeSession;
   activeSession = null;
+  if (session.pauseMonitor) clearInterval(session.pauseMonitor);
   // Release any keys that were pressed but never released. Otherwise the
   // sharer's OS thinks Shift/Ctrl is still held down after a session ends.
   if (nutjs && session.heldKeys.size > 0) {
@@ -204,6 +216,53 @@ async function disarmSession() {
     }
   }
   mainWindow?.webContents.send('rc-session-ended');
+}
+
+// Distance between two cursor points, in pixels.
+function cursorDelta(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+}
+
+// Called on every event from the controller. If the OS cursor has drifted away
+// from where we last set it (i.e., the sharer physically moved their mouse),
+// flip into paused state and notify the renderer. Returns true if we should
+// skip injecting this event.
+function checkTakeoverAndPause(): boolean {
+  const session = activeSession;
+  if (!session) return true;
+  if (session.lastInjectedPos) {
+    const current = screen.getCursorScreenPoint();
+    if (cursorDelta(current, session.lastInjectedPos) > TAKEOVER_THRESHOLD_PX) {
+      session.lastUserActivityAt = Date.now();
+      if (!session.paused) {
+        session.paused = true;
+        session.lastPolledPos = current;
+        mainWindow?.webContents.send('rc-injection-paused');
+      }
+    }
+  }
+  return session.paused;
+}
+
+// Runs on a timer while a session is armed. While paused, watches the cursor
+// for the sharer to stop moving — once they've been still for IDLE_RESUME_MS,
+// resume injection. Outside of paused state this is a no-op (the inject path
+// is where divergence gets detected; once injection stops, this loop takes
+// over the watch since lastInjectedPos becomes stale).
+function monitorTakeover(): void {
+  const session = activeSession;
+  if (!session || !session.paused) return;
+  const current = screen.getCursorScreenPoint();
+  if (session.lastPolledPos && cursorDelta(current, session.lastPolledPos) > TAKEOVER_THRESHOLD_PX) {
+    session.lastUserActivityAt = Date.now();
+  }
+  session.lastPolledPos = current;
+  if (Date.now() - session.lastUserActivityAt > IDLE_RESUME_MS) {
+    session.paused = false;
+    session.lastInjectedPos = null;
+    session.lastPolledPos = null;
+    mainWindow?.webContents.send('rc-injection-resumed');
+  }
 }
 // --- End remote control state ---
 
@@ -273,9 +332,10 @@ app.on('ready', () => {
   .source img { width: 100%; border-radius: 6px; display: block; }
   .source .name { font-size: 12px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a1a1a1; }
   .source.selected .name { color: #fafafa; }
-  .footer { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
-  .audio-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1a1; }
-  .audio-toggle input { accent-color: #fafafa; }
+  .footer { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; gap: 16px; }
+  .toggles { display: flex; flex-direction: column; gap: 6px; }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1a1; }
+  .toggle input { accent-color: #fafafa; }
   .buttons { display: flex; gap: 8px; }
   button { padding: 8px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.15s; }
   .btn-cancel { background: #262626; color: #a1a1a1; }
@@ -287,7 +347,10 @@ app.on('ready', () => {
   <h2>Choose what to share</h2>
   <div class="sources" id="sources"></div>
   <div class="footer">
-    <label class="audio-toggle"><input type="checkbox" id="audio" checked> Share audio</label>
+    <div class="toggles">
+      <label class="toggle"><input type="checkbox" id="audio" checked> Share audio</label>
+      <label class="toggle"><input type="checkbox" id="allow-control" checked> Allow remote control</label>
+    </div>
     <div class="buttons">
       <button class="btn-cancel" id="cancel">Cancel</button>
       <button class="btn-share" id="share" disabled>Share</button>
@@ -310,11 +373,15 @@ app.on('ready', () => {
       container.appendChild(div);
     });
     document.getElementById('cancel').onclick = () => {
-      window.electronAPI.selectScreenSource(null, false);
+      window.electronAPI.selectScreenSource(null, false, false);
     };
     document.getElementById('share').onclick = () => {
       if (selectedId) {
-        window.electronAPI.selectScreenSource(selectedId, document.getElementById('audio').checked);
+        window.electronAPI.selectScreenSource(
+          selectedId,
+          document.getElementById('audio').checked,
+          document.getElementById('allow-control').checked,
+        );
       }
     };
   </script>
@@ -323,14 +390,14 @@ app.on('ready', () => {
     picker.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pickerHTML));
 
     // Wait for the user's selection via IPC
-    const selection = await new Promise<{ sourceId: string | null; audio: boolean }>((resolve) => {
-      const handler = (_event: Electron.IpcMainEvent, sourceId: string | null, audio: boolean) => {
-        resolve({ sourceId, audio });
+    const selection = await new Promise<{ sourceId: string | null; audio: boolean; allowControl: boolean }>((resolve) => {
+      const handler = (_event: Electron.IpcMainEvent, sourceId: string | null, audio: boolean, allowControl: boolean) => {
+        resolve({ sourceId, audio, allowControl });
       };
       ipcMain.once('select-screen-source', handler);
       picker.on('closed', () => {
         ipcMain.removeListener('select-screen-source', handler);
-        resolve({ sourceId: null, audio: false });
+        resolve({ sourceId: null, audio: false, allowControl: false });
       });
     });
 
@@ -342,6 +409,9 @@ app.on('ready', () => {
         // Record which display was shared so remote-control can map normalized
         // cursor coords from viewers back to this screen's pixel bounds.
         sharedDisplayBounds = boundsForSource(selected);
+        // Tell the renderer whether this share is pre-authorized for RC, so
+        // incoming requests can auto-grant without prompting the sharer.
+        mainWindow?.webContents.send('rc-share-auth', { allowControl: !!selection.allowControl });
         callback({ video: selected, ...(selection.audio ? { audio: 'loopback' } : {}) });
         return;
       }
@@ -416,7 +486,13 @@ app.on('ready', () => {
       heldKeys: new Set(),
       windowStart: Date.now(),
       eventsInWindow: 0,
+      lastInjectedPos: null,
+      lastUserActivityAt: 0,
+      paused: false,
+      pauseMonitor: null,
+      lastPolledPos: null,
     };
+    activeSession.pauseMonitor = setInterval(() => monitorTakeover(), 200);
     return { ok: true };
   });
 
@@ -457,6 +533,10 @@ app.on('ready', () => {
     }
     if (++session.eventsInWindow > 300) return;
 
+    // Drop the event if the sharer has wrested back control. The session
+    // (and screen share) stays alive — injection just stops until they idle.
+    if (checkTakeoverAndPause()) return;
+
     const { mouse, keyboard, Button, Key, Point } = nutjs;
 
     try {
@@ -466,6 +546,7 @@ app.on('ready', () => {
           const x = Math.round(session.bounds.x + Math.min(1, Math.max(0, evt.x)) * session.bounds.width);
           const y = Math.round(session.bounds.y + Math.min(1, Math.max(0, evt.y)) * session.bounds.height);
           await mouse.setPosition(new Point(x, y));
+          session.lastInjectedPos = { x, y };
           return;
         }
         case 'mouse-down':

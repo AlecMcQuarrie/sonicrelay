@@ -10,7 +10,11 @@ type RemoteControlInputEvent =
 
 interface ElectronAPI {
   isElectron: true;
-  selectScreenSource: (sourceId: string | null, audio: boolean) => void;
+  selectScreenSource: (sourceId: string | null, audio: boolean, allowControl: boolean) => void;
+  // Fired once when a share begins, carrying the sharer's pre-authorization
+  // choice from the source picker. The renderer caches it so incoming RC
+  // requests can auto-grant without prompting. Cleared when the share ends.
+  onShareAuth: (callback: (allowControl: boolean) => void) => () => void;
   checkForUpdate: () => Promise<{ version: string; downloadUrl: string; releaseUrl: string } | null>;
   downloadUpdate: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
   installUpdate: (filePath: string) => Promise<void>;
@@ -25,6 +29,8 @@ interface ElectronAPI {
     openAccessibilitySettings: () => Promise<void>;
     clearSharedDisplay: () => Promise<{ ok: boolean }>;
     onSessionEnded: (callback: () => void) => () => void;
+    onInjectionPaused: (callback: () => void) => () => void;
+    onInjectionResumed: (callback: () => void) => () => void;
   };
 }
 

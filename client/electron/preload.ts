@@ -2,8 +2,15 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
-  selectScreenSource: (sourceId: string | null, audio: boolean) => {
-    ipcRenderer.send('select-screen-source', sourceId, audio);
+  selectScreenSource: (sourceId: string | null, audio: boolean, allowControl: boolean) => {
+    ipcRenderer.send('select-screen-source', sourceId, audio, allowControl);
+  },
+  onShareAuth: (callback: (allowControl: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { allowControl: boolean }) => {
+      callback(!!payload?.allowControl);
+    };
+    ipcRenderer.on('rc-share-auth', handler);
+    return () => { ipcRenderer.removeListener('rc-share-auth', handler); };
   },
   // Auto-update
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
@@ -29,6 +36,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = () => callback();
       ipcRenderer.on('rc-session-ended', handler);
       return () => { ipcRenderer.removeListener('rc-session-ended', handler); };
+    },
+    // Fires on the sharer when injection is paused (their own mouse activity)
+    // or resumed (they've been idle long enough). The session is still alive.
+    onInjectionPaused: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('rc-injection-paused', handler);
+      return () => { ipcRenderer.removeListener('rc-injection-paused', handler); };
+    },
+    onInjectionResumed: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('rc-injection-resumed', handler);
+      return () => { ipcRenderer.removeListener('rc-injection-resumed', handler); };
     },
   },
 });

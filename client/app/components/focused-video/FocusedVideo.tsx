@@ -15,6 +15,13 @@ interface FocusedVideoProps {
   onSendInput?: (event: RemoteControlInputEvent) => void;
   onReleaseControl?: () => void;
   onRequestControl?: (sharerUsername: string) => void;
+  // The sharer we already have a request in-flight for. The button for that
+  // tile shows a "Requested..." state until the request resolves.
+  pendingRequestTo?: string | null;
+  // Per-sharer "allow remote control" state, broadcast by the server. A
+  // sharer whose entry is `false` here had the toggle off at share start
+  // (or stopped sharing) — Request Control is disabled for that tile.
+  sharerRcStates?: Record<string, boolean>;
 }
 
 function parseLabel(key: string): string {
@@ -25,7 +32,7 @@ function parseLabel(key: string): string {
 }
 
 function VideoTile({
-  videoKey, track, onRemove, isControlling, localUsername, onSendInput, onReleaseControl, onRequestControl,
+  videoKey, track, onRemove, isControlling, localUsername, onSendInput, onReleaseControl, onRequestControl, pendingRequestTo, sharerRcStates,
 }: {
   videoKey: string;
   track: MediaStreamTrack;
@@ -35,15 +42,21 @@ function VideoTile({
   onSendInput?: (event: RemoteControlInputEvent) => void;
   onReleaseControl?: () => void;
   onRequestControl?: (sharerUsername: string) => void;
+  pendingRequestTo?: string | null;
+  sharerRcStates?: Record<string, boolean>;
 }) {
   const [source, ...rest] = videoKey.split(':');
   const sourceUsername = rest.join(':');
+  // Default `undefined` → true (graceful): treat unknown sharers as allowing
+  // requests rather than silently disabling the button on stale clients.
+  const sharerAllowsRc = sharerRcStates?.[sourceUsername] ?? true;
   const canRequestControl =
     !isControlling
     && source === 'screen'
     && sourceUsername !== localUsername
     && !!onRequestControl
     && !!window.electronAPI;
+  const requestPending = pendingRequestTo === sourceUsername;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
@@ -173,12 +186,17 @@ function VideoTile({
       <div className="absolute top-1 right-1 flex items-center gap-1">
         {canRequestControl && (
           <button
-            className="h-5 px-1.5 flex items-center gap-1 rounded bg-black/60 text-white text-[10px] hover:bg-primary hover:text-primary-foreground"
+            className="h-5 px-1.5 flex items-center gap-1 rounded bg-black/60 text-white text-[10px] hover:bg-primary hover:text-primary-foreground disabled:opacity-60 disabled:hover:bg-black/60 disabled:hover:text-white disabled:cursor-default"
             onClick={(e) => { e.stopPropagation(); onRequestControl?.(sourceUsername); }}
-            aria-label={`Request control of ${sourceUsername}'s screen`}
+            disabled={requestPending || !sharerAllowsRc}
+            aria-label={
+              !sharerAllowsRc ? `${sourceUsername} has disabled remote control`
+              : requestPending ? `Control request to ${sourceUsername} pending`
+              : `Request control of ${sourceUsername}'s screen`
+            }
           >
             <MousePointer className="w-3 h-3" />
-            Request control
+            {!sharerAllowsRc ? "Control disabled" : requestPending ? "Request pending…" : "Request control"}
           </button>
         )}
         <button
@@ -194,7 +212,7 @@ function VideoTile({
 }
 
 export default function FocusedVideo({
-  videoTracks, onRemove, onCloseAll, controlledKey, localUsername, onSendInput, onReleaseControl, onRequestControl,
+  videoTracks, onRemove, onCloseAll, controlledKey, localUsername, onSendInput, onReleaseControl, onRequestControl, pendingRequestTo, sharerRcStates,
 }: FocusedVideoProps) {
   const count = videoTracks.size;
   const columns = count <= 1 ? 1 : 2;
@@ -224,6 +242,8 @@ export default function FocusedVideo({
             onSendInput={onSendInput}
             onReleaseControl={onReleaseControl}
             onRequestControl={onRequestControl}
+            pendingRequestTo={pendingRequestTo}
+            sharerRcStates={sharerRcStates}
           />
         ))}
       </div>

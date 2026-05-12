@@ -15,6 +15,63 @@ type ControlSession = {
 const sessionsBySharer = new Map<string, ControlSession>();
 const sessionsById = new Map<string, ControlSession>();
 
+// Outstanding requests, keyed by sharer → requester → expire timer. Only one
+// in-flight request per (sharer, requester) pair: spamming the button while a
+// prior request is still unanswered is rejected. The 60s timer auto-clears
+// stale entries so an ignored request doesn't lock the requester out forever.
+const REQUEST_TTL_MS = 60_000;
+const pendingRequests = new Map<string, Map<string, NodeJS.Timeout>>();
+
+// Per-user "remote control allowed" state, set by sharers via `set-rc-state`.
+// Absence is treated as false (no share active → no control possible). When a
+// sharer flips this, the server broadcasts to their voice channel so
+// controllers' UI can disable the Request Control button immediately.
+const rcEnabledByUser = new Map<string, boolean>();
+
+function voiceChannelOf(username: string): string | null {
+  for (const client of clients.values()) {
+    if (client.username === username) return client.voiceChannelId;
+  }
+  return null;
+}
+
+// Called when a peer joins a voice channel — sends them the current
+// "remote control enabled" state of every sharer already in that channel,
+// so their UI starts in sync without waiting for a state-change broadcast.
+export function sendRcStateSnapshot(ws: WebSocket, channelId: string) {
+  for (const client of clients.values()) {
+    if (client.voiceChannelId !== channelId) continue;
+    if (rcEnabledByUser.get(client.username) !== true) continue;
+    ws.send(JSON.stringify({
+      type: 'remote-control-notification',
+      action: 'rc-state-update',
+      sharerUsername: client.username,
+      enabled: true,
+    }));
+  }
+}
+
+function clearPending(sharer: string, requester: string) {
+  const forSharer = pendingRequests.get(sharer);
+  if (!forSharer) return;
+  const timer = forSharer.get(requester);
+  if (timer) clearTimeout(timer);
+  forSharer.delete(requester);
+  if (forSharer.size === 0) pendingRequests.delete(sharer);
+}
+
+function clearPendingFor(username: string) {
+  pendingRequests.get(username)?.forEach((timer) => clearTimeout(timer));
+  pendingRequests.delete(username);
+  for (const [sharer, requesters] of pendingRequests) {
+    const timer = requesters.get(username);
+    if (!timer) continue;
+    clearTimeout(timer);
+    requesters.delete(username);
+    if (requesters.size === 0) pendingRequests.delete(sharer);
+  }
+}
+
 function findSocket(username: string): WebSocket | null {
   for (const [ws, client] of clients) {
     if (client.username === username && ws.readyState === WebSocket.OPEN) return ws;
@@ -47,6 +104,21 @@ export function revokeSessionsFor(username: string) {
       reason: 'disconnect',
     });
   }
+  clearPendingFor(username);
+  // Disconnected users can't still be sharing — broadcast that their RC is
+  // off so any controllers in the channel update their buttons.
+  if (rcEnabledByUser.get(username)) {
+    rcEnabledByUser.delete(username);
+    const channelId = voiceChannelOf(username);
+    if (channelId) {
+      broadcastToVoiceChannel(channelId, {
+        type: 'remote-control-notification',
+        action: 'rc-state-update',
+        sharerUsername: username,
+        enabled: false,
+      });
+    }
+  }
 }
 
 export async function handleRemoteControlMessage(
@@ -71,11 +143,26 @@ export async function handleRemoteControlMessage(
         respond({ error: 'not in the same voice channel' });
         return;
       }
+      if (rcEnabledByUser.get(target) !== true) {
+        respond({ error: `${target} has disabled remote control for this share.` });
+        return;
+      }
       const targetWs = findSocket(target);
       if (!targetWs) {
         respond({ error: 'target offline' });
         return;
       }
+      const pendingForTarget = pendingRequests.get(target) ?? new Map<string, NodeJS.Timeout>();
+      if (pendingForTarget.has(username)) {
+        respond({ error: 'You already have a request pending — wait for a response.' });
+        return;
+      }
+      pendingForTarget.set(
+        username,
+        setTimeout(() => clearPending(target, username), REQUEST_TTL_MS),
+      );
+      pendingRequests.set(target, pendingForTarget);
+
       targetWs.send(JSON.stringify({
         type: 'remote-control-notification',
         action: 'control-requested',
@@ -85,12 +172,36 @@ export async function handleRemoteControlMessage(
       return;
     }
 
+    case 'set-rc-state': {
+      // Sharer is publishing whether requests are allowed for their share.
+      // Broadcast to their voice channel so peers' UI can update; if no
+      // change, skip the broadcast.
+      const enabled = !!msg.enabled;
+      const prior = rcEnabledByUser.get(username);
+      if (prior === enabled) return;
+      if (enabled) rcEnabledByUser.set(username, true);
+      else rcEnabledByUser.delete(username);
+      const channelId = voiceChannelOf(username);
+      if (channelId) {
+        broadcastToVoiceChannel(channelId, {
+          type: 'remote-control-notification',
+          action: 'rc-state-update',
+          sharerUsername: username,
+          enabled,
+        });
+      }
+      return;
+    }
+
     case 'respond-control': {
       const requester = msg.requesterUsername;
       if (typeof requester !== 'string') {
         respond({ error: 'invalid requester' });
         return;
       }
+      // Request is being answered — drop the dedup entry so the requester can
+      // try again later (if they were denied, or if the granted session ends).
+      clearPending(username, requester);
       const requesterWs = findSocket(requester);
       const channelId = sameVoiceChannel(username, requester);
 
@@ -171,6 +282,22 @@ export async function handleRemoteControlMessage(
         action: 'control-input',
         sessionId: session.sessionId,
         event: msg.event,
+      }));
+      return;
+    }
+
+    case 'pause-state': {
+      // Sharer notifies the controller that their takeover safeguard has
+      // paused or resumed injection. Session stays alive either way.
+      const session = sessionsById.get(msg.sessionId);
+      if (!session || session.sharer !== username) return; // sharer-only
+      const controllerWs = findSocket(session.controller);
+      if (!controllerWs) return;
+      controllerWs.send(JSON.stringify({
+        type: 'remote-control-notification',
+        action: 'pause-state',
+        sessionId: session.sessionId,
+        paused: !!msg.paused,
       }));
       return;
     }
