@@ -9,8 +9,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff, Headphones, HeadphoneOff } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, PhoneOff, Headphones, HeadphoneOff, Music2 } from "lucide-react";
 import { SCREEN_BITRATES, type ScreenShareSettings } from "~/lib/voice";
+import type { Soundboard } from "~/lib/soundboard";
+import SoundboardDialog from "~/components/soundboard/SoundboardDialog";
 
 function formatBitrate(bps: number): string {
   return `${(bps / 1_000_000).toFixed(1)} Mbps`;
@@ -47,6 +49,12 @@ interface VoiceControlsProps {
   onStartScreenShare: (settings: ScreenShareSettings) => void;
   onStopScreenShare: () => void;
   onDisconnect: () => void;
+  sounds: Soundboard[];
+  isAdmin: boolean;
+  serverIP: string;
+  accessToken: string;
+  onPlaySound: (soundId: string) => void;
+  onSoundsChanged: () => void;
 }
 
 /*
@@ -59,8 +67,10 @@ interface VoiceControlsProps {
 export default function VoiceControls({
   channelName, isMuted, isDeafened, isCameraOn, isScreenSharing,
   onToggleMute, onToggleDeafen, onToggleCamera, onStartScreenShare, onStopScreenShare, onDisconnect,
+  sounds, isAdmin, serverIP, accessToken, onPlaySound, onSoundsChanged,
 }: VoiceControlsProps) {
   const [settings, setSettings] = useState<ScreenShareSettings>(loadSettings);
+  const [soundboardOpen, setSoundboardOpen] = useState(false);
 
   const updateSettings = (update: Partial<ScreenShareSettings>) => {
     setSettings((prev) => {
@@ -172,12 +182,32 @@ export default function VoiceControls({
         <Button
           variant="ghost"
           size="sm"
+          onClick={() => setSoundboardOpen(true)}
+          aria-label="Open soundboard"
+        >
+          <Music2 className="w-4 h-4" />
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onDisconnect}
           aria-label="Disconnect from voice"
         >
           <PhoneOff className="w-4 h-4" />
         </Button>
       </div>
+
+      <SoundboardDialog
+        open={soundboardOpen}
+        onOpenChange={setSoundboardOpen}
+        sounds={sounds}
+        isAdmin={isAdmin}
+        serverIP={serverIP}
+        accessToken={accessToken}
+        onPlay={onPlaySound}
+        onSoundsChanged={onSoundsChanged}
+      />
     </div>
   );
 }

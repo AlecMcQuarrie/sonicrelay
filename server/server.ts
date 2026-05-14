@@ -5,7 +5,7 @@ import "dotenv/config";
 import path from 'path';
 import fs from 'fs';
 import * as voice from './voice';
-import { Users, Messages, DirectMessages, Channels, upsertDmConversation } from './db';
+import { Users, Messages, DirectMessages, Channels, Soundboards, upsertDmConversation } from './db';
 import { clients, broadcastToAll, broadcastToVoiceChannel, broadcastPresence, broadcastUserKey, getVoicePeers, getMutedUsers, getDeafenedUsers } from './clients';
 import authRoutes from './routes/auth';
 import channelRoutes from './routes/channels';
@@ -14,6 +14,7 @@ import dmRoutes from './routes/dm';
 import uploadRoutes from './routes/uploads';
 import readStatusRoutes from './routes/read-status';
 import serverInfoRoutes from './routes/server-info';
+import soundboardRoutes from './routes/soundboard';
 import { handleRemoteControlMessage, revokeSessionsFor, sendRcStateSnapshot } from './routes/remote-control';
 import { loadServerConfig } from './config';
 
@@ -67,6 +68,7 @@ app.use(userRoutes);
 app.use(dmRoutes);
 app.use(uploadRoutes);
 app.use(readStatusRoutes);
+app.use(soundboardRoutes);
 
 // Server start
 const config = loadServerConfig();
@@ -384,6 +386,21 @@ wss.on('connection', (ws, req: SonicRelayIncomingMessage) => {
     // ── Remote control (Electron-only feature; web clients simply never send these) ──
     if (msg.type === 'remote-control') {
       await handleRemoteControlMessage(ws, username, msg);
+      return;
+    }
+
+    // ── Soundboard play ──
+    if (msg.type === 'soundboard-play') {
+      const client = clients.get(ws);
+      if (!client?.voiceChannelId) return;
+      if (typeof msg.soundId !== 'string') return;
+      const sound = Soundboards.get((s: any) => s.__id === msg.soundId);
+      if (!sound) return;
+      // Include the sender so they hear the same trigger as everyone else —
+      // single playback code path, no local/remote divergence.
+      broadcastToVoiceChannel(client.voiceChannelId, {
+        type: 'soundboard-play', soundId: msg.soundId, username,
+      });
       return;
     }
 

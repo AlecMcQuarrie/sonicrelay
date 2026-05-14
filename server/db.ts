@@ -112,6 +112,19 @@ export type LastRead = {
 };
 export const LastReads = db.createCollection<LastRead>("last_reads");
 
+export type Soundboard = {
+  name: string;
+  emoji: string;
+  fileUrl: string;
+  trimStart: number;
+  trimEnd: number;
+  duration: number;
+  uploadedBy: string;
+  uploadedAt: number;
+  $id: string;
+};
+export const Soundboards = db.createCollection<Soundboard>("soundboards");
+
 export function upsertLastRead(username: string, targetId: string, timestamp: string) {
   const existing = LastReads.get(
     (r: any) => r.username === username && r.targetId === targetId

@@ -30,6 +30,7 @@ import type { StoredConnection } from "~/lib/auth";
 import { useConnectionManager } from "~/lib/connectionManager";
 import { MessageCacheStore, channelKey, dmKey, type ChannelCacheEntry } from "~/lib/messageCache";
 import { decrypt } from "~/lib/crypto";
+import { playSound, type Soundboard } from "~/lib/soundboard";
 
 type Channel = {
   name: string;
@@ -94,6 +95,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   // long-lived session JWT never touches a URL (and therefore never ends up
   // in access logs or browser history). Auto-refreshed below.
   const [uploadToken, setUploadToken] = useState<string | null>(null);
+  const [sounds, setSounds] = useState<Soundboard[]>([]);
   const [leftSheetOpen, setLeftSheetOpen] = useState(false);
   const [rightSheetOpen, setRightSheetOpen] = useState(false);
   const {
@@ -127,6 +129,10 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   selectedDmPartnerRef.current = selectedDmPartner;
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
+  const soundsRef = useRef(sounds);
+  soundsRef.current = sounds;
+  const uploadTokenRef = useRef(uploadToken);
+  uploadTokenRef.current = uploadToken;
   const windowFocusedRef = useRef(
     typeof document !== "undefined"
       ? document.visibilityState === "visible" && document.hasFocus()
@@ -256,6 +262,13 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       .then((res) => res.json())
       .then((data) => initUnreads(data.unreads || {}));
 
+    fetch(`${protocol}://${serverIP}/soundboard`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setSounds(data.sounds || []))
+      .catch(() => {});
+
     let unmounting = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -316,6 +329,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       }
       if (msg.type === 'voice-pings') {
         setPeerPings(msg.pings);
+      }
+      if (msg.type === 'soundboard-play' && typeof msg.soundId === 'string') {
+        const sound = soundsRef.current.find((s) => s.__id === msg.soundId);
+        const token = uploadTokenRef.current;
+        if (sound && token) playSound(sound, serverIP, token);
       }
       if (msg.type === 'role-changed') {
         setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
@@ -958,6 +976,19 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     });
   }, [protocol, serverIP, accessToken]);
 
+  const fetchSounds = useCallback(() => {
+    fetch(`${protocol}://${serverIP}/soundboard`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => setSounds(data.sounds || []))
+      .catch(() => {});
+  }, [protocol, serverIP, accessToken]);
+
+  const playSoundboardSound = useCallback((soundId: string) => {
+    wsRef.current?.send(JSON.stringify({ type: 'soundboard-play', soundId }));
+  }, []);
+
   const setUserRole = useCallback((target: string, role: Role) => {
     fetch(`${protocol}://${serverIP}/users/${target}/role`, {
       method: 'PUT',
@@ -1060,6 +1091,12 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
           onStartScreenShare={startScreenShare}
           onStopScreenShare={stopScreenShare}
           onDisconnect={leaveVoiceChannel}
+          sounds={sounds}
+          isAdmin={myRole === 'admin' || myRole === 'superadmin'}
+          serverIP={serverIP}
+          accessToken={accessToken}
+          onPlaySound={playSoundboardSound}
+          onSoundsChanged={fetchSounds}
         />
       )}
       <UserPanel
