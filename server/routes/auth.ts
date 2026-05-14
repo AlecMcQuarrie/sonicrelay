@@ -160,6 +160,7 @@ const HEX6 = /^#[0-9a-fA-F]{6}$/;
 const SETTING_VALIDATORS: Record<string, (v: unknown) => unknown | undefined> = {
   micGain: (v) => typeof v === 'number' && v >= 0 && v <= 5 ? v : undefined,
   speakerGain: (v) => typeof v === 'number' && v >= 0 && v <= 5 ? v : undefined,
+  soundboardGain: (v) => typeof v === 'number' && v >= 0 && v <= 5 ? v : undefined,
   // 'manual' was removed once Silero auto-VAD landed; accept it from older
   // clients and coerce up at read time in the client, don't store it again.
   vadMode: (v) => v === 'off' || v === 'auto' ? v : v === 'manual' ? 'auto' : undefined,
@@ -257,6 +258,27 @@ router.put("/me/encryption-keys", (req: Request, res: Response) => {
   }, (u) => u.username === auth.username);
   broadcastUserKey(auth.username, publicKey);
   return res.sendStatus(200);
+});
+
+// Soundboard peer settings endpoints
+router.get("/me/soundboard-peer-settings", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const user = Users.get((u) => u.username === auth.username);
+  return res.status(200).json({ soundboardPeerSettings: user?.soundboardPeerSettings || {} });
+});
+
+router.put("/me/soundboard-peer-settings", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  const { peerUsername, volume, muted } = req.body;
+  if (!peerUsername) return res.sendStatus(400);
+  const user = Users.get((u) => u.username === auth.username);
+  if (!user) return res.sendStatus(404);
+  const settings = (user as any).soundboardPeerSettings || {};
+  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
+  Users.update((u) => { (u as any).soundboardPeerSettings = settings; }, (u) => u.username === auth.username);
+  return res.status(200).json({ soundboardPeerSettings: settings });
 });
 
 // Screen audio peer settings endpoints

@@ -36,7 +36,12 @@ function isAdmin(role: string | undefined) {
 
 router.get("/soundboard", (req: Request, res: Response) => {
   if (!authenticate(req)) return res.sendStatus(401);
-  return res.status(200).json({ sounds: Soundboards.getAll() });
+  // Existing rows from before the `order` field exists default to 0; new
+  // uploads get max+1, and admin drag-reorder assigns explicit indices.
+  const sorted = Soundboards.getAll().sort(
+    (a: any, b: any) => ((a.order ?? 0) - (b.order ?? 0)) || a.uploadedAt - b.uploadedAt,
+  );
+  return res.status(200).json({ sounds: sorted });
 });
 
 router.post("/soundboard", (req: Request, res: Response) => {
@@ -66,6 +71,10 @@ router.post("/soundboard", (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid trim range" });
     }
 
+    const maxOrder = Soundboards.getAll().reduce(
+      (m: number, s: any) => Math.max(m, s.order ?? 0), -1,
+    );
+
     const sound = Soundboards.create({
       name,
       emoji,
@@ -75,10 +84,25 @@ router.post("/soundboard", (req: Request, res: Response) => {
       duration,
       uploadedBy: auth.username,
       uploadedAt: Date.now(),
+      order: maxOrder + 1,
     });
 
     return res.status(200).json({ sound });
   });
+});
+
+router.put("/soundboard/order", (req: Request, res: Response) => {
+  const auth = authenticate(req);
+  if (!auth) return res.sendStatus(401);
+  if (!isAdmin(auth.role)) return res.sendStatus(403);
+  const { order } = req.body;
+  if (!Array.isArray(order) || !order.every((id) => typeof id === "string")) {
+    return res.status(400).json({ error: "order must be an array of sound IDs" });
+  }
+  order.forEach((id, idx) => {
+    Soundboards.update((s: any) => { s.order = idx; }, (s: any) => s.__id === id);
+  });
+  return res.sendStatus(204);
 });
 
 router.delete("/soundboard/:id", (req: Request, res: Response) => {

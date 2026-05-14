@@ -1,4 +1,5 @@
 import type { VoiceClient } from "~/lib/voice";
+import { setSoundboardMasterGain } from "~/lib/soundboard";
 import {
   DEFAULT_CUSTOM_COLORS,
   loadCustomColors,
@@ -23,6 +24,7 @@ export const DEFAULT_EQ_BANDS: EqBand[] = EQ_BAND_FREQS.map(() => ({ gain: 0, q:
 export type UserSettings = {
   micGain: number;
   speakerGain: number;
+  soundboardGain: number;
   // "manual threshold" VAD was dropped when Silero auto-VAD landed.
   vadMode: 'off' | 'auto';
   pttEnabled: boolean;
@@ -37,6 +39,7 @@ export type UserSettings = {
 export const DEFAULT_SETTINGS: UserSettings = {
   micGain: 1,
   speakerGain: 1,
+  soundboardGain: 1,
   vadMode: 'off',
   pttEnabled: false,
   pttKey: '',
@@ -78,6 +81,7 @@ export function loadCachedSettings(): UserSettings {
   return {
     micGain: parseFloat(localStorage.getItem('micGain') ?? String(DEFAULT_SETTINGS.micGain)),
     speakerGain: parseFloat(localStorage.getItem('speakerGain') ?? String(DEFAULT_SETTINGS.speakerGain)),
+    soundboardGain: parseFloat(localStorage.getItem('soundboardGain') ?? String(DEFAULT_SETTINGS.soundboardGain)),
     vadMode,
     pttEnabled: localStorage.getItem('pttEnabled') === 'true',
     pttKey: localStorage.getItem('pttKey') ?? DEFAULT_SETTINGS.pttKey,
@@ -109,6 +113,9 @@ export function cacheSettings(partial: Partial<UserSettings>) {
 // immediately after construction with cached values, and again after the
 // server fetch resolves with the authoritative values.
 export function applyVoiceSettings(voice: VoiceClient | null, s: UserSettings) {
+  // Soundboard gain is process-wide (module state in lib/soundboard.ts),
+  // so apply it whether or not the VoiceClient is initialized yet.
+  setSoundboardMasterGain(s.soundboardGain);
   if (!voice) return;
   voice.setMicGain(s.micGain);
   voice.setSpeakerGain(s.speakerGain);

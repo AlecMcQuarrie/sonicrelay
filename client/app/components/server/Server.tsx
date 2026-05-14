@@ -30,7 +30,13 @@ import type { StoredConnection } from "~/lib/auth";
 import { useConnectionManager } from "~/lib/connectionManager";
 import { MessageCacheStore, channelKey, dmKey, type ChannelCacheEntry } from "~/lib/messageCache";
 import { decrypt } from "~/lib/crypto";
-import { playSound, type Soundboard } from "~/lib/soundboard";
+import {
+  playSound,
+  hydrateSoundboardPeerSettings,
+  setSoundboardPeerVolume,
+  setSoundboardPeerMuted,
+  type Soundboard,
+} from "~/lib/soundboard";
 
 type Channel = {
   name: string;
@@ -83,6 +89,7 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
   const [isDeafened, setIsDeafened] = useState(() => localStorage.getItem('voiceDeafened') === 'true');
   const [voicePeerSettings, setVoicePeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [screenAudioPeerSettings, setScreenAudioPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
+  const [soundboardPeerSettings, setSoundboardPeerSettings] = useState<Record<string, { volume: number; muted: boolean }>>({});
   const [myRole, setMyRole] = useState<Role>('member');
   const [userRoles, setUserRoles] = useState<Record<string, Role>>({});
   const [nameColors, setNameColors] = useState<Record<string, string | null>>({});
@@ -250,6 +257,16 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       .then((res) => res.json())
       .then((data) => setScreenAudioPeerSettings(data.screenAudioPeerSettings || {}));
 
+    fetch(`${protocol}://${serverIP}/me/soundboard-peer-settings`, {
+      headers: { "access-token": accessToken },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const settings = data.soundboardPeerSettings || {};
+        setSoundboardPeerSettings(settings);
+        hydrateSoundboardPeerSettings(settings);
+      });
+
     fetch(`${protocol}://${serverIP}/dm/conversations`, {
       headers: { "access-token": accessToken },
     })
@@ -333,7 +350,8 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
       if (msg.type === 'soundboard-play' && typeof msg.soundId === 'string') {
         const sound = soundsRef.current.find((s) => s.__id === msg.soundId);
         const token = uploadTokenRef.current;
-        if (sound && token) playSound(sound, serverIP, token);
+        const triggeringUser = typeof msg.username === 'string' ? msg.username : username;
+        if (sound && token) playSound(sound, serverIP, token, triggeringUser);
       }
       if (msg.type === 'role-changed') {
         setUserRoles((prev) => ({ ...prev, [msg.username]: msg.role }));
@@ -969,6 +987,32 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
     });
   }, [saveScreenAudioPeerSetting]);
 
+  const saveSoundboardPeerSetting = useCallback((peerUsername: string, volume: number, muted: boolean) => {
+    fetch(`${protocol}://${serverIP}/me/soundboard-peer-settings`, {
+      method: 'PUT',
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ peerUsername, volume, muted }),
+    });
+  }, [serverIP, accessToken, protocol]);
+
+  const handleSoundboardVolume = useCallback((user: string, volume: number) => {
+    setSoundboardPeerVolume(user, volume);
+    setSoundboardPeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, volume };
+      saveSoundboardPeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveSoundboardPeerSetting]);
+
+  const handleSoundboardMute = useCallback((user: string, muted: boolean) => {
+    setSoundboardPeerMuted(user, muted);
+    setSoundboardPeerSettings((prev) => {
+      const setting = { ...prev[user] || { volume: 1, muted: false }, muted };
+      saveSoundboardPeerSetting(user, setting.volume, setting.muted);
+      return { ...prev, [user]: setting };
+    });
+  }, [saveSoundboardPeerSetting]);
+
   const banUser = useCallback((target: string) => {
     fetch(`${protocol}://${serverIP}/users/${target}/ban`, {
       method: 'POST',
@@ -1066,6 +1110,9 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
         voicePeerSettings={voicePeerSettings}
         onUserVolume={handleUserVolume}
         onUserMute={handleUserMute}
+        soundboardPeerSettings={soundboardPeerSettings}
+        onSoundboardVolume={handleSoundboardVolume}
+        onSoundboardMute={handleSoundboardMute}
         onJoinVoiceChannel={joinVoiceChannel}
         canCreateChannel={myRole !== 'member'}
         onCreateChannel={createChannel}

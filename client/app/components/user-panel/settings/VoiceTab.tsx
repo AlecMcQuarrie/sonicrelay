@@ -7,6 +7,7 @@ import InputLevelMeter from "./InputLevelMeter";
 import PttKeyCapture from "./PttKeyCapture";
 import type { VoiceClient } from "~/lib/voice";
 import type { UserSettings } from "~/lib/settings";
+import { setSoundboardMasterGain } from "~/lib/soundboard";
 import { DB_MIN, DB_MAX, DB_STEP, ampToDb, dbToAmp, formatDb, clampAmpToDbRange } from "~/lib/audio-units";
 
 type Device = { deviceId: string; label: string };
@@ -59,6 +60,11 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
   const saveSpeakerGain = (value: number) => {
     updateSettings({ speakerGain: value });
     voiceRef.current?.setSpeakerGain(value);
+  };
+
+  const saveSoundboardGain = (value: number) => {
+    updateSettings({ soundboardGain: value });
+    setSoundboardMasterGain(value);
   };
 
   const saveVadMode = (mode: VadMode) => {
@@ -135,6 +141,20 @@ export default function VoiceTab({ voiceRef, settings, updateSettings }: VoiceTa
           step={DB_STEP}
           value={[ampToDb(clampAmpToDbRange(settings.speakerGain))]}
           onValueChange={([db]) => saveSpeakerGain(dbToAmp(db))}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Soundboard Volume</label>
+          <span className="text-xs text-muted-foreground tabular-nums">{formatDb(ampToDb(clampAmpToDbRange(settings.soundboardGain)))}</span>
+        </div>
+        <Slider
+          min={DB_MIN}
+          max={DB_MAX}
+          step={DB_STEP}
+          value={[ampToDb(clampAmpToDbRange(settings.soundboardGain))]}
+          onValueChange={([db]) => saveSoundboardGain(dbToAmp(db))}
         />
       </div>
 

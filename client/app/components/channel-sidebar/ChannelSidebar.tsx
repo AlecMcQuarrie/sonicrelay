@@ -39,6 +39,7 @@ interface ChannelSidebarProps {
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
   screenAudioPeerSettings: Record<string, VoicePeerSetting>;
+  soundboardPeerSettings: Record<string, VoicePeerSetting>;
   unreadCounts: Record<string, number>;
   onSelectTextChannel: (channelId: string) => void;
   onJoinVoiceChannel: (channelId: string) => void;
@@ -47,6 +48,8 @@ interface ChannelSidebarProps {
   onScreenAudioMute: (username: string, muted: boolean) => void;
   onUserVolume: (username: string, volume: number) => void;
   onUserMute: (username: string, muted: boolean) => void;
+  onSoundboardVolume: (username: string, volume: number) => void;
+  onSoundboardMute: (username: string, muted: boolean) => void;
   canCreateChannel: boolean;
   onCreateChannel: (name: string, type: "text" | "voice") => void;
   dmConversations: { partner: string; lastTimestamp: string }[];
@@ -64,7 +67,7 @@ function pingColor(ms: number): string {
 }
 
 
-function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, voicePeerSettings, screenAudioPeerSettings, peerPings, hasScreenAudio, isScreenSharing, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute }: {
+function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, voicePeerSettings, screenAudioPeerSettings, soundboardPeerSettings, peerPings, hasScreenAudio, isScreenSharing, onUserVolume, onUserMute, onScreenAudioVolume, onScreenAudioMute, onSoundboardVolume, onSoundboardMute }: {
   user: string;
   isSelf?: boolean;
   speakingLevels: Map<string, number>;
@@ -72,6 +75,7 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
   deafenedUsers: Set<string>;
   voicePeerSettings: Record<string, VoicePeerSetting>;
   screenAudioPeerSettings: Record<string, VoicePeerSetting>;
+  soundboardPeerSettings: Record<string, VoicePeerSetting>;
   peerPings: Record<string, number>;
   hasScreenAudio: boolean;
   isScreenSharing: boolean;
@@ -79,6 +83,8 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
   onUserMute: (username: string, muted: boolean) => void;
   onScreenAudioVolume: (username: string, volume: number) => void;
   onScreenAudioMute: (username: string, muted: boolean) => void;
+  onSoundboardVolume: (username: string, volume: number) => void;
+  onSoundboardMute: (username: string, muted: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -136,6 +142,15 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
             />
           </>
         )}
+        <div className="mx-2 my-1 border-t" />
+        <div className="px-2 pt-1 text-[10px] uppercase text-muted-foreground tracking-wide">Soundboard</div>
+        <PeerVolumeMenu
+          username={user}
+          setting={soundboardPeerSettings[user] || { volume: 1, muted: false }}
+          disabled={isSelf}
+          onVolume={onSoundboardVolume}
+          onMute={onSoundboardMute}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -189,8 +204,11 @@ export default function ChannelSidebar({
   deafenedUsers,
   voicePeerSettings,
   screenAudioPeerSettings,
+  soundboardPeerSettings,
   onUserVolume,
   onUserMute,
+  onSoundboardVolume,
+  onSoundboardMute,
   canCreateChannel,
   onCreateChannel,
   dmConversations,
@@ -265,6 +283,7 @@ export default function ChannelSidebar({
                   deafenedUsers={deafenedUsers}
                   voicePeerSettings={voicePeerSettings}
                   screenAudioPeerSettings={screenAudioPeerSettings}
+                  soundboardPeerSettings={soundboardPeerSettings}
                   peerPings={peerPings}
                   hasScreenAudio={screenAudioUsers.has(user)}
                   isScreenSharing={screenTracks.has(user)}
@@ -272,6 +291,8 @@ export default function ChannelSidebar({
                   onUserMute={onUserMute}
                   onScreenAudioVolume={onScreenAudioVolume}
                   onScreenAudioMute={onScreenAudioMute}
+                  onSoundboardVolume={onSoundboardVolume}
+                  onSoundboardMute={onSoundboardMute}
                 />
                 {videoTracks.has(user) && !focusedFeeds.has(`camera:${user}`) && (
                   <PeerVideo

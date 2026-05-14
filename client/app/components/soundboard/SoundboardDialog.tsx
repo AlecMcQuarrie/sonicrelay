@@ -29,6 +29,8 @@ export default function SoundboardDialog({
 }: SoundboardDialogProps) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) onSoundsChanged();
@@ -46,6 +48,24 @@ export default function SoundboardDialog({
       clearSoundCache(id);
       onSoundsChanged();
     }
+  };
+
+  const reorder = async (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    const from = sounds.findIndex((s) => s.__id === sourceId);
+    const to = sounds.findIndex((s) => s.__id === targetId);
+    if (from === -1 || to === -1) return;
+    const next = [...sounds];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    const newOrder = next.map((s) => s.__id);
+    const protocol = getProtocol(serverIP);
+    const res = await fetch(`${protocol}://${serverIP}/soundboard/order`, {
+      method: "PUT",
+      headers: { "access-token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ order: newOrder }),
+    });
+    if (res.ok) onSoundsChanged();
   };
 
   return (
@@ -90,28 +110,67 @@ export default function SoundboardDialog({
             </div>
           ) : (
             <div className="grid grid-cols-3 gap-2">
-              {sounds.map((s) => (
-                <div key={s.__id} className="relative">
-                  <Button
-                    variant="outline"
-                    className="w-full h-20 flex flex-col items-center justify-center gap-1 p-2"
-                    onClick={() => onPlay(s.__id)}
+              {sounds.map((s) => {
+                const draggable = isAdmin && editMode;
+                const isDragging = draggedId === s.__id;
+                const isDragOver = dragOverId === s.__id && draggedId !== s.__id;
+                return (
+                  <div
+                    key={s.__id}
+                    className={cn(
+                      "relative rounded-lg",
+                      draggable && "cursor-grab",
+                      isDragging && "opacity-40",
+                      isDragOver && "ring-2 ring-destructive",
+                    )}
+                    draggable={draggable}
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", s.__id);
+                      setDraggedId(s.__id);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedId(null);
+                      setDragOverId(null);
+                    }}
+                    onDragOver={(e) => {
+                      if (!draggable) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverId !== s.__id) setDragOverId(s.__id);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverId === s.__id) setDragOverId(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const sourceId = e.dataTransfer.getData("text/plain");
+                      setDraggedId(null);
+                      setDragOverId(null);
+                      if (sourceId) reorder(sourceId, s.__id);
+                    }}
                   >
-                    <span className="text-2xl leading-none">{s.emoji}</span>
-                    <span className="text-xs truncate max-w-full">{s.name}</span>
-                  </Button>
-                  {isAdmin && editMode && (
-                    <button
-                      type="button"
-                      aria-label={`Delete ${s.name}`}
-                      onClick={(e) => { e.stopPropagation(); deleteSound(s.__id); }}
-                      className="absolute top-1 right-1 p-1 rounded bg-background/80 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                    <Button
+                      variant="outline"
+                      className="w-full h-20 flex flex-col items-center justify-center gap-1 p-2"
+                      onClick={() => onPlay(s.__id)}
                     >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                      <span className="text-2xl leading-none">{s.emoji}</span>
+                      <span className="text-xs truncate max-w-full">{s.name}</span>
+                    </Button>
+                    {isAdmin && editMode && (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${s.name}`}
+                        onClick={(e) => { e.stopPropagation(); deleteSound(s.__id); }}
+                        className="absolute top-1 right-1 p-1 rounded bg-background/80 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

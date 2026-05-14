@@ -25,6 +25,7 @@ export type EqBand = {
 export type UserSettings = {
   micGain?: number;
   speakerGain?: number;
+  soundboardGain?: number;
   vadMode?: 'off' | 'auto';
   pttEnabled?: boolean;
   pttKey?: string;
@@ -41,6 +42,7 @@ export type User = {
   profilePhoto: string | null;
   voicePeerSettings: Record<string, VoicePeerSetting> | null;
   screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
+  soundboardPeerSettings: Record<string, VoicePeerSetting> | null;
   role: Role;
   banned: boolean;
   nameColor: string | null;
@@ -121,6 +123,7 @@ export type Soundboard = {
   duration: number;
   uploadedBy: string;
   uploadedAt: number;
+  order: number;
   $id: string;
 };
 export const Soundboards = db.createCollection<Soundboard>("soundboards");
