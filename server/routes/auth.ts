@@ -260,27 +260,6 @@ router.put("/me/encryption-keys", (req: Request, res: Response) => {
   return res.sendStatus(200);
 });
 
-// Soundboard peer settings endpoints
-router.get("/me/soundboard-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const user = Users.get((u) => u.username === auth.username);
-  return res.status(200).json({ soundboardPeerSettings: user?.soundboardPeerSettings || {} });
-});
-
-router.put("/me/soundboard-peer-settings", (req: Request, res: Response) => {
-  const auth = authenticate(req);
-  if (!auth) return res.sendStatus(401);
-  const { peerUsername, volume, muted } = req.body;
-  if (!peerUsername) return res.sendStatus(400);
-  const user = Users.get((u) => u.username === auth.username);
-  if (!user) return res.sendStatus(404);
-  const settings = (user as any).soundboardPeerSettings || {};
-  settings[peerUsername] = { volume: volume ?? 1, muted: muted ?? false };
-  Users.update((u) => { (u as any).soundboardPeerSettings = settings; }, (u) => u.username === auth.username);
-  return res.status(200).json({ soundboardPeerSettings: settings });
-});
-
 // Screen audio peer settings endpoints
 router.get("/me/screen-audio-peer-settings", (req: Request, res: Response) => {
   const auth = authenticate(req);

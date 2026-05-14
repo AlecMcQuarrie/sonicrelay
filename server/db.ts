@@ -42,7 +42,6 @@ export type User = {
   profilePhoto: string | null;
   voicePeerSettings: Record<string, VoicePeerSetting> | null;
   screenAudioPeerSettings: Record<string, VoicePeerSetting> | null;
-  soundboardPeerSettings: Record<string, VoicePeerSetting> | null;
   role: Role;
   banned: boolean;
   nameColor: string | null;

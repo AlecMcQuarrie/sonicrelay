@@ -10,18 +10,17 @@ type VoicePeerSetting = {
 interface PeerVolumeMenuProps {
   username: string;
   setting: VoicePeerSetting;
-  hideTitle?: boolean;
   onVolume: (username: string, volume: number) => void;
   onMute: (username: string, muted: boolean) => void;
 }
 
-export default function PeerVolumeMenu({ username, setting, hideTitle, onVolume, onMute }: PeerVolumeMenuProps) {
+export default function PeerVolumeMenu({ username, setting, onVolume, onMute }: PeerVolumeMenuProps) {
   const [volumeDb, setVolumeDb] = useState(ampToDb(clampAmpToDbRange(setting.volume)));
   const [muted, setMuted] = useState(setting.muted);
 
   return (
     <div className="p-2 space-y-2 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
-      {!hideTitle && <div className="text-xs font-medium truncate">{username}</div>}
+      <div className="text-xs font-medium truncate">{username}</div>
       <div className="flex items-center gap-2">
         <button
           className="shrink-0 p-0.5 rounded hover:bg-muted"
