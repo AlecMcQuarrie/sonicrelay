@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,8 +8,9 @@ import {
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { Slider } from "~/components/ui/slider";
 import { getProtocol } from "~/lib/protocol";
+import { getSoundboardAudioContext } from "~/lib/soundboard";
+import WaveformTrimmer from "./WaveformTrimmer";
 
 interface SoundUploadDialogProps {
   open: boolean;
@@ -23,36 +24,25 @@ export default function SoundUploadDialog({
   open, onOpenChange, serverIP, accessToken, onUploaded,
 }: SoundUploadDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const previewStopRef = useRef<number | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [duration, setDuration] = useState(0);
+  const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
   const [trim, setTrim] = useState<[number, number]>([0, 0]);
   const [name, setName] = useState("");
   const [emoji, setEmoji] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  // Revoke any active blob URL when the dialog closes or the file changes.
-  useEffect(() => {
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [objectUrl]);
+  const [decoding, setDecoding] = useState(false);
 
   const reset = () => {
     setFile(null);
-    setObjectUrl(null);
-    setDuration(0);
+    setBuffer(null);
     setTrim([0, 0]);
     setName("");
     setEmoji("");
     setError(null);
     setSubmitting(false);
-    if (previewStopRef.current) {
-      cancelAnimationFrame(previewStopRef.current);
-      previewStopRef.current = null;
-    }
+    setDecoding(false);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -60,7 +50,7 @@ export default function SoundUploadDialog({
     onOpenChange(next);
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
@@ -73,40 +63,25 @@ export default function SoundUploadDialog({
       return;
     }
     setError(null);
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
     setFile(f);
-    setObjectUrl(URL.createObjectURL(f));
-    setDuration(0);
-    setTrim([0, 0]);
-  };
-
-  const onLoadedMetadata = () => {
-    const d = audioRef.current?.duration ?? 0;
-    if (!Number.isFinite(d) || d <= 0) return;
-    setDuration(d);
-    setTrim([0, d]);
-  };
-
-  const previewTrimmed = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = trim[0];
-    audio.play().catch(() => {});
-    const tick = () => {
-      if (!audio || audio.paused) { previewStopRef.current = null; return; }
-      if (audio.currentTime >= trim[1]) {
-        audio.pause();
-        previewStopRef.current = null;
-        return;
-      }
-      previewStopRef.current = requestAnimationFrame(tick);
-    };
-    if (previewStopRef.current) cancelAnimationFrame(previewStopRef.current);
-    previewStopRef.current = requestAnimationFrame(tick);
+    setBuffer(null);
+    setDecoding(true);
+    try {
+      const arrayBuffer = await f.arrayBuffer();
+      const decoded = await getSoundboardAudioContext().decodeAudioData(arrayBuffer);
+      setBuffer(decoded);
+      setTrim([0, decoded.duration]);
+    } catch {
+      setError("Could not decode this audio file");
+      setFile(null);
+    } finally {
+      setDecoding(false);
+    }
   };
 
   const handleSubmit = async () => {
-    if (!file || duration <= 0) return;
+    if (!file || !buffer) return;
+    const duration = buffer.duration;
     if (name.trim().length < 1 || name.trim().length > 32) {
       setError("Name must be 1–32 characters");
       return;
@@ -173,32 +148,20 @@ export default function SoundUploadDialog({
         ) : (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground truncate">{file.name}</div>
-            <audio
-              ref={audioRef}
-              src={objectUrl ?? undefined}
-              controls
-              onLoadedMetadata={onLoadedMetadata}
-              className="w-full"
-            />
-            {duration > 0 && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Trim</label>
-                <Slider
-                  min={0}
-                  max={duration}
-                  step={0.01}
-                  value={trim}
-                  onValueChange={(v) => setTrim([v[0], v[1]] as [number, number])}
-                />
-                <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-                  <span>{trim[0].toFixed(2)}s</span>
-                  <span>{trim[1].toFixed(2)}s</span>
-                </div>
-                <Button variant="ghost" size="sm" onClick={previewTrimmed}>
-                  Preview trimmed
-                </Button>
-              </div>
+
+            {decoding && (
+              <div className="text-xs text-muted-foreground">Decoding…</div>
             )}
+
+            {buffer && (
+              <WaveformTrimmer
+                buffer={buffer}
+                trimStart={trim[0]}
+                trimEnd={trim[1]}
+                onTrimChange={(s, e) => setTrim([s, e])}
+              />
+            )}
+
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -227,7 +190,7 @@ export default function SoundUploadDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={!file || submitting}>
+          <Button onClick={handleSubmit} disabled={!file || !buffer || submitting}>
             {submitting ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>

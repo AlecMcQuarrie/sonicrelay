@@ -12,34 +12,54 @@ export type Soundboard = {
   uploadedAt: number;
 };
 
-// Reuse one HTMLAudioElement per sound so the browser only fetches the
-// file once per session. Re-triggering a sound mid-playback resets it.
-const audioCache = new Map<string, HTMLAudioElement>();
+// One shared AudioContext for the whole app's soundboard playback.
+// AudioBufferSourceNode is single-use, so each playSound() creates a
+// fresh source — naturally polyphonic, no manual pause/restart juggling.
+let audioContext: AudioContext | null = null;
+function ctx(): AudioContext {
+  if (!audioContext) audioContext = new AudioContext();
+  return audioContext;
+}
 
-export function playSound(sound: Soundboard, serverIP: string, uploadToken: string) {
-  let audio = audioCache.get(sound.__id);
-  if (!audio) {
-    audio = new Audio(buildUploadUrl(sound.fileUrl, serverIP, uploadToken));
-    audioCache.set(sound.__id, audio);
+export function getSoundboardAudioContext(): AudioContext {
+  return ctx();
+}
+
+const bufferCache = new Map<string, Promise<AudioBuffer>>();
+
+function fetchBuffer(sound: Soundboard, serverIP: string, uploadToken: string): Promise<AudioBuffer> {
+  let p = bufferCache.get(sound.__id);
+  if (!p) {
+    p = (async () => {
+      const url = buildUploadUrl(sound.fileUrl, serverIP, uploadToken);
+      const res = await fetch(url);
+      const arrayBuffer = await res.arrayBuffer();
+      return ctx().decodeAudioData(arrayBuffer);
+    })().catch((err) => {
+      bufferCache.delete(sound.__id);
+      throw err;
+    });
+    bufferCache.set(sound.__id, p);
   }
+  return p;
+}
 
-  audio.pause();
-  audio.currentTime = sound.trimStart;
-
-  const onTimeUpdate = () => {
-    if (audio!.currentTime >= sound.trimEnd) {
-      audio!.pause();
-      audio!.removeEventListener("timeupdate", onTimeUpdate);
-    }
-  };
-  audio.addEventListener("timeupdate", onTimeUpdate);
-  audio.play().catch(() => {});
+export async function playSound(sound: Soundboard, serverIP: string, uploadToken: string) {
+  try {
+    const c = ctx();
+    if (c.state === "suspended") await c.resume();
+    const buffer = await fetchBuffer(sound, serverIP, uploadToken);
+    const source = c.createBufferSource();
+    source.buffer = buffer;
+    source.connect(c.destination);
+    const start = Math.max(0, Math.min(sound.trimStart, buffer.duration));
+    const end = Math.max(start, Math.min(sound.trimEnd, buffer.duration));
+    source.start(0, start, end - start);
+  } catch {
+    // Swallow — a failed sound shouldn't break the rest of the app.
+  }
 }
 
 export function clearSoundCache(soundId: string) {
-  const audio = audioCache.get(soundId);
-  if (audio) {
-    audio.pause();
-    audioCache.delete(soundId);
-  }
+  bufferCache.delete(soundId);
 }
