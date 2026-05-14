@@ -35,6 +35,7 @@ import {
   hydrateSoundboardPeerSettings,
   setSoundboardPeerVolume,
   setSoundboardPeerMuted,
+  setSoundboardMasterGain,
   type Soundboard,
 } from "~/lib/soundboard";
 
@@ -1142,6 +1143,11 @@ export default function Server({ connection, privateKey, isActive }: ServerProps
           isAdmin={myRole === 'admin' || myRole === 'superadmin'}
           serverIP={serverIP}
           accessToken={accessToken}
+          soundboardGain={settings.soundboardGain}
+          onChangeSoundboardGain={(gain) => {
+            updateSettings({ soundboardGain: gain });
+            setSoundboardMasterGain(gain);
+          }}
           onPlaySound={playSoundboardSound}
           onSoundsChanged={fetchSounds}
         />

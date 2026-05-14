@@ -88,45 +88,48 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
 }) {
   const [open, setOpen] = useState(false);
 
+  const row = (
+    <div
+      onContextMenu={isSelf ? undefined : (e) => {
+        e.preventDefault();
+        setOpen(true);
+      }}
+      className={`py-1 text-sm text-muted-foreground flex items-center gap-2 select-none rounded-md px-1 ${isSelf ? "" : "cursor-pointer hover:bg-accent"}`}
+    >
+      <span
+        className={`inline-block w-2 h-2 rounded-full shrink-0 ${(speakingLevels.get(user) ?? 0) > 0.05 ? "bg-green-500" : "bg-muted-foreground/40"}`}
+        style={{
+          opacity: 0.4 + 0.6 * (speakingLevels.get(user) ?? 0),
+          transform: `scale(${0.85 + 0.3 * (speakingLevels.get(user) ?? 0)})`,
+        }}
+      />
+      <span className={`flex-1 truncate ${isScreenSharing ? "text-red-500" : ""}`}>{user}</span>
+      {selfMutedUsers.has(user) && (
+        <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
+      )}
+      {deafenedUsers.has(user) && (
+        <HeadphoneOff className="w-3 h-3 text-muted-foreground shrink-0" />
+      )}
+      {voicePeerSettings[user]?.muted && (
+        <MicOff className="w-3 h-3 text-red-500 shrink-0" />
+      )}
+      {peerPings[user] !== undefined && (
+        <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
+          {peerPings[user]}ms
+        </span>
+      )}
+    </div>
+  );
+
+  if (isSelf) return row;
+
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <div
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setOpen(true);
-          }}
-          className="py-1 text-sm text-muted-foreground flex items-center gap-2 cursor-pointer select-none hover:bg-accent rounded-md px-1"
-        >
-          <span
-            className={`inline-block w-2 h-2 rounded-full shrink-0 ${(speakingLevels.get(user) ?? 0) > 0.05 ? "bg-green-500" : "bg-muted-foreground/40"}`}
-            style={{
-              opacity: 0.4 + 0.6 * (speakingLevels.get(user) ?? 0),
-              transform: `scale(${0.85 + 0.3 * (speakingLevels.get(user) ?? 0)})`,
-            }}
-          />
-          <span className={`flex-1 truncate ${isScreenSharing ? "text-red-500" : ""}`}>{user}</span>
-          {selfMutedUsers.has(user) && (
-            <MicOff className="w-3 h-3 text-muted-foreground shrink-0" />
-          )}
-          {deafenedUsers.has(user) && (
-            <HeadphoneOff className="w-3 h-3 text-muted-foreground shrink-0" />
-          )}
-          {voicePeerSettings[user]?.muted && (
-            <MicOff className="w-3 h-3 text-red-500 shrink-0" />
-          )}
-          {peerPings[user] !== undefined && (
-            <span className={`text-[10px] font-mono ${pingColor(peerPings[user])}`}>
-              {peerPings[user]}ms
-            </span>
-          )}
-        </div>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{row}</DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <PeerVolumeMenu
           username={user}
           setting={voicePeerSettings[user] || { volume: 1, muted: false }}
-          disabled={isSelf}
           onVolume={onUserVolume}
           onMute={onUserMute}
         />
@@ -136,7 +139,6 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
             <ScreenAudioControls
               username={user}
               setting={screenAudioPeerSettings[user] || { volume: 1, muted: false }}
-              disabled={isSelf}
               onVolume={onScreenAudioVolume}
               onMute={onScreenAudioMute}
             />
@@ -147,7 +149,7 @@ function PeerRow({ user, isSelf, speakingLevels, selfMutedUsers, deafenedUsers, 
         <PeerVolumeMenu
           username={user}
           setting={soundboardPeerSettings[user] || { volume: 1, muted: false }}
-          disabled={isSelf}
+          hideTitle
           onVolume={onSoundboardVolume}
           onMute={onSoundboardMute}
         />

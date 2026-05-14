@@ -10,22 +10,21 @@ type VoicePeerSetting = {
 interface PeerVolumeMenuProps {
   username: string;
   setting: VoicePeerSetting;
-  disabled?: boolean;
+  hideTitle?: boolean;
   onVolume: (username: string, volume: number) => void;
   onMute: (username: string, muted: boolean) => void;
 }
 
-export default function PeerVolumeMenu({ username, setting, disabled, onVolume, onMute }: PeerVolumeMenuProps) {
+export default function PeerVolumeMenu({ username, setting, hideTitle, onVolume, onMute }: PeerVolumeMenuProps) {
   const [volumeDb, setVolumeDb] = useState(ampToDb(clampAmpToDbRange(setting.volume)));
   const [muted, setMuted] = useState(setting.muted);
 
   return (
     <div className="p-2 space-y-2 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
-      <div className="text-xs font-medium truncate">{username}</div>
+      {!hideTitle && <div className="text-xs font-medium truncate">{username}</div>}
       <div className="flex items-center gap-2">
         <button
-          className="shrink-0 p-0.5 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
-          disabled={disabled}
+          className="shrink-0 p-0.5 rounded hover:bg-muted"
           onClick={() => {
             const next = !muted;
             setMuted(next);
@@ -42,8 +41,7 @@ export default function PeerVolumeMenu({ username, setting, disabled, onVolume, 
           max={DB_MAX}
           step={DB_STEP}
           value={volumeDb}
-          disabled={disabled}
-          className="w-full h-1 accent-foreground disabled:opacity-50"
+          className="w-full h-1 accent-foreground"
           onChange={(e) => {
             const db = parseFloat(e.target.value);
             setVolumeDb(db);

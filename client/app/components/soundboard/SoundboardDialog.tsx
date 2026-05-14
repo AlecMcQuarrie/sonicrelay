@@ -7,10 +7,12 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
+import { Slider } from "~/components/ui/slider";
 import { cn } from "~/lib/utils";
 import { getProtocol } from "~/lib/protocol";
 import type { Soundboard } from "~/lib/soundboard";
 import { clearSoundCache } from "~/lib/soundboard";
+import { DB_MIN, DB_MAX, DB_STEP, ampToDb, dbToAmp, formatDb, clampAmpToDbRange } from "~/lib/audio-units";
 import SoundUploadDialog from "./SoundUploadDialog";
 
 interface SoundboardDialogProps {
@@ -20,12 +22,14 @@ interface SoundboardDialogProps {
   isAdmin: boolean;
   serverIP: string;
   accessToken: string;
+  soundboardGain: number;
+  onChangeSoundboardGain: (gain: number) => void;
   onPlay: (soundId: string) => void;
   onSoundsChanged: () => void;
 }
 
 export default function SoundboardDialog({
-  open, onOpenChange, sounds, isAdmin, serverIP, accessToken, onPlay, onSoundsChanged,
+  open, onOpenChange, sounds, isAdmin, serverIP, accessToken, soundboardGain, onChangeSoundboardGain, onPlay, onSoundsChanged,
 }: SoundboardDialogProps) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -99,6 +103,22 @@ export default function SoundboardDialog({
               )}
             </div>
           </DialogHeader>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-muted-foreground">Volume</label>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {formatDb(ampToDb(clampAmpToDbRange(soundboardGain)))}
+              </span>
+            </div>
+            <Slider
+              min={DB_MIN}
+              max={DB_MAX}
+              step={DB_STEP}
+              value={[ampToDb(clampAmpToDbRange(soundboardGain))]}
+              onValueChange={([db]) => onChangeSoundboardGain(dbToAmp(db))}
+            />
+          </div>
 
           {sounds.length === 0 ? (
             <div className="text-sm text-muted-foreground py-6 text-center">

@@ -53,6 +53,8 @@ interface VoiceControlsProps {
   isAdmin: boolean;
   serverIP: string;
   accessToken: string;
+  soundboardGain: number;
+  onChangeSoundboardGain: (gain: number) => void;
   onPlaySound: (soundId: string) => void;
   onSoundsChanged: () => void;
 }
@@ -67,7 +69,7 @@ interface VoiceControlsProps {
 export default function VoiceControls({
   channelName, isMuted, isDeafened, isCameraOn, isScreenSharing,
   onToggleMute, onToggleDeafen, onToggleCamera, onStartScreenShare, onStopScreenShare, onDisconnect,
-  sounds, isAdmin, serverIP, accessToken, onPlaySound, onSoundsChanged,
+  sounds, isAdmin, serverIP, accessToken, soundboardGain, onChangeSoundboardGain, onPlaySound, onSoundsChanged,
 }: VoiceControlsProps) {
   const [settings, setSettings] = useState<ScreenShareSettings>(loadSettings);
   const [soundboardOpen, setSoundboardOpen] = useState(false);
@@ -205,6 +207,8 @@ export default function VoiceControls({
         isAdmin={isAdmin}
         serverIP={serverIP}
         accessToken={accessToken}
+        soundboardGain={soundboardGain}
+        onChangeSoundboardGain={onChangeSoundboardGain}
         onPlay={onPlaySound}
         onSoundsChanged={onSoundsChanged}
       />

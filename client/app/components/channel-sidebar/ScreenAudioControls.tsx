@@ -9,12 +9,11 @@ type VoicePeerSetting = {
 interface ScreenAudioControlsProps {
   username: string;
   setting: VoicePeerSetting;
-  disabled?: boolean;
   onVolume: (username: string, volume: number) => void;
   onMute: (username: string, muted: boolean) => void;
 }
 
-export default function ScreenAudioControls({ username, setting, disabled, onVolume, onMute }: ScreenAudioControlsProps) {
+export default function ScreenAudioControls({ username, setting, onVolume, onMute }: ScreenAudioControlsProps) {
   const [muted, setMuted] = useState(setting.muted);
   const [volume, setVolume] = useState(Math.min(1, setting.volume));
 
@@ -23,8 +22,7 @@ export default function ScreenAudioControls({ username, setting, disabled, onVol
       <div className="text-xs font-medium">Screen Audio</div>
       <div className="flex items-center gap-2">
         <button
-          className="shrink-0 p-0.5 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
-          disabled={disabled}
+          className="shrink-0 p-0.5 rounded hover:bg-muted"
           onClick={() => {
             const next = !muted;
             setMuted(next);
@@ -41,8 +39,7 @@ export default function ScreenAudioControls({ username, setting, disabled, onVol
           max="1"
           step="0.05"
           value={volume}
-          disabled={disabled}
-          className="w-full h-1 accent-foreground disabled:opacity-50"
+          className="w-full h-1 accent-foreground"
           onChange={(e) => {
             const v = parseFloat(e.target.value);
             setVolume(v);
