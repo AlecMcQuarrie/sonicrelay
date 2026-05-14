@@ -85,7 +85,7 @@ export default function VoiceControls({
       <div className="text-sm text-muted-foreground mb-2">
         Connected to <span className="font-bold text-foreground">{channelName}</span>
       </div>
-      <div className="flex gap-2">
+      <div className="flex justify-between">
         <Button
           variant="ghost"
           size="sm"
