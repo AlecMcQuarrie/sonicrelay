@@ -2,6 +2,7 @@ import { app, BrowserWindow, session, protocol, net, desktopCapturer, ipcMain, s
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 
 // --- Auto-update (DIY via GitHub Releases) ---
@@ -65,6 +66,34 @@ function checkForUpdates(): Promise<UpdateInfo | null> {
       });
     }).on('error', () => resolve(null));
   });
+}
+
+// Path to the launcher the user actually clicked — NOT process.execPath, which
+// on win32 portable points inside the temp extraction dir, and on Linux
+// AppImage points at the mounted squashfs. The env vars are set by the
+// respective launchers; we fall back to execPath for an installed/dev build.
+function getCurrentExePath(): string {
+  if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) {
+    return process.env.PORTABLE_EXECUTABLE_FILE;
+  }
+  if (process.platform === 'linux' && process.env.APPIMAGE) {
+    return process.env.APPIMAGE;
+  }
+  return process.execPath;
+}
+
+// Directory we'll download the new build into. Prefer the folder the user
+// already keeps the app in so updates stay co-located; fall back to Downloads
+// if that folder isn't writable (Program Files, a read-only mount, etc.).
+function getUpdateDownloadDir(): string {
+  if (!app.isPackaged) return app.getPath('downloads');
+  const exeDir = path.dirname(getCurrentExePath());
+  try {
+    fs.accessSync(exeDir, fs.constants.W_OK);
+    return exeDir;
+  } catch {
+    return app.getPath('downloads');
+  }
 }
 
 function downloadAsset(url: string, destPath: string, onProgress: (percent: number) => void): Promise<void> {
@@ -434,7 +463,7 @@ app.on('ready', () => {
 
     const ext = getAssetPattern();
     const fileName = `SonicRelay-${pendingUpdate.version}${ext}`;
-    const destPath = path.join(app.getPath('downloads'), fileName);
+    const destPath = path.join(getUpdateDownloadDir(), fileName);
 
     try {
       await downloadAsset(pendingUpdate.downloadUrl, destPath, (percent) => {
@@ -447,7 +476,31 @@ app.on('ready', () => {
   });
 
   ipcMain.handle('install-update', async (_event, filePath: string) => {
-    shell.openPath(filePath);
+    const oldExe = getCurrentExePath();
+    const sameFile = path.resolve(oldExe) === path.resolve(filePath);
+
+    // macOS update is a .dmg the user drags into /Applications, so there's
+    // no in-place "old exe" to delete — just open the disk image. In dev or
+    // when the new path collides with the running exe, do the same.
+    if (!app.isPackaged || process.platform === 'darwin' || sameFile) {
+      shell.openPath(filePath);
+      app.quit();
+      return;
+    }
+
+    if (process.platform === 'win32') {
+      // Detached cmd: ping ≈ 3s sleep so this process exits and Windows
+      // releases the lock on oldExe, then del the old launcher and start the
+      // new one. windowsHide keeps the console flash off-screen.
+      const cmd = `ping 127.0.0.1 -n 4 > nul & del /q "${oldExe}" & start "" "${filePath}"`;
+      spawn('cmd.exe', ['/c', cmd], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } else {
+      // Linux AppImage. Linux allows unlinking running binaries, but the
+      // small sleep gives the parent time to exit cleanly first.
+      const script = `sleep 2; rm -f "${oldExe}"; chmod +x "${filePath}"; "${filePath}" &`;
+      spawn('sh', ['-c', script], { detached: true, stdio: 'ignore' }).unref();
+    }
+
     app.quit();
   });
 

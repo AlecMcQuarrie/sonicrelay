@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import { preloadAllMedia } from "~/lib/preload-media";
 import { buildUploadUrl } from "~/lib/protocol";
 import { channelKey, type MessageCacheStore } from "~/lib/messageCache";
+import { formatMessageTimestamp, formatShortTime, shouldGroupMessages } from "~/lib/formatTime";
 
 type Message = {
   __id?: string;
@@ -444,6 +445,7 @@ export default function TextChannel({
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
+            const grouped = shouldGroupMessages(messages[i - 1], msg);
 
             // Resolve the reply target from loaded messages or cache
             const replyTarget = msg.replyToId
@@ -455,9 +457,14 @@ export default function TextChannel({
               <ContextMenuTrigger asChild>
                 <div data-msg-id={msg.__id} className={cn(
                   "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700 cursor-pointer hover:bg-accent/50",
+                  grouped && "!mt-0.5",
                   highlightedMessageId === msg.__id && "bg-primary/15"
                 )}>
-                  <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  {grouped ? (
+                    <div className="w-8 shrink-0" />
+                  ) : (
+                    <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  )}
                   <div className="flex-1 min-w-0">
                     {/* Reply quote */}
                     {msg.replyToId && (
@@ -491,17 +498,19 @@ export default function TextChannel({
                         )}
                       </div>
                     )}
-                    <div className="flex items-baseline gap-1.5 min-w-0">
-                      <span
-                        className="font-bold truncate min-w-0"
-                        style={nameColors[msg.sender] ? { color: nameColors[msg.sender]! } : undefined}
-                      >
-                        {msg.sender}
-                      </span>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
+                    {!grouped && (
+                      <div className="flex items-baseline gap-1.5 min-w-0">
+                        <span
+                          className="font-bold truncate min-w-0"
+                          style={nameColors[msg.sender] ? { color: nameColors[msg.sender]! } : undefined}
+                        >
+                          {msg.sender}
+                        </span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {formatMessageTimestamp(msg.timestamp)}
+                        </span>
+                      </div>
+                    )}
                     {msg.messageContent && (
                       <MessageContent
                         text={msg.messageContent}
@@ -514,7 +523,12 @@ export default function TextChannel({
                       <MessageAttachments attachments={msg.attachments} serverIP={serverIP} uploadToken={uploadToken} />
                     )}
                   </div>
-                  <div className="flex gap-0.5 shrink-0 mt-1">
+                  <div className="flex items-center gap-1.5 shrink-0 mt-1">
+                    {grouped && (
+                      <span className="text-[10px] leading-none text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity tabular-nums">
+                        {formatShortTime(msg.timestamp)}
+                      </span>
+                    )}
                     {msg.__id && (
                       <button
                         onClick={() => startReply(msg)}

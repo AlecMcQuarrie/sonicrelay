@@ -13,6 +13,7 @@ import { importPublicKey, deriveSharedSecret, encrypt, decrypt, encryptFile } fr
 import { getProtocol, buildUploadUrl } from "~/lib/protocol";
 import { preloadAllMedia } from "~/lib/preload-media";
 import { dmKey, type MessageCacheStore } from "~/lib/messageCache";
+import { formatMessageTimestamp, formatShortTime, shouldGroupMessages } from "~/lib/formatTime";
 
 type DecryptedMessage = {
   __id: string;
@@ -490,6 +491,7 @@ export default function DirectMessage({
           {messages.map((msg, i) => {
             const photo = profilePhotos[msg.sender];
             const photoUrl = photo && uploadToken ? buildUploadUrl(photo, serverIP, uploadToken) : null;
+            const grouped = shouldGroupMessages(messages[i - 1], msg);
 
             const replyTarget = msg.replyToId
               ? messages.find((m) => m.__id === msg.replyToId) || (replyCache.get(msg.replyToId) as DecryptedMessage | 'deleted' | undefined) || null
@@ -500,9 +502,14 @@ export default function DirectMessage({
               <ContextMenuTrigger asChild>
                 <div data-msg-id={msg.__id} className={cn(
                   "min-w-0 group flex gap-2 items-start rounded-md px-1 -mx-1 transition-colors duration-700 cursor-pointer hover:bg-accent/50",
+                  grouped && "!mt-0.5",
                   highlightedMessageId === msg.__id && "bg-primary/15"
                 )}>
-                  <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  {grouped ? (
+                    <div className="w-8 shrink-0" />
+                  ) : (
+                    <Avatar username={msg.sender} profilePhoto={photoUrl} className="mt-0.5" />
+                  )}
                   <div className="flex-1 min-w-0">
                     {/* Reply quote */}
                     {msg.replyToId && (
@@ -536,12 +543,14 @@ export default function DirectMessage({
                         )}
                       </div>
                     )}
-                    <div className="flex items-baseline gap-1.5 min-w-0">
-                      <span className="font-bold truncate min-w-0">{msg.sender}</span>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
+                    {!grouped && (
+                      <div className="flex items-baseline gap-1.5 min-w-0">
+                        <span className="font-bold truncate min-w-0">{msg.sender}</span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {formatMessageTimestamp(msg.timestamp)}
+                        </span>
+                      </div>
+                    )}
                     {msg.text && (
                       <MessageContent
                         text={msg.text}
@@ -554,7 +563,12 @@ export default function DirectMessage({
                       <EncryptedAttachments attachments={msg.attachments} sharedKey={sharedKey} serverIP={serverIP} accessToken={accessToken} />
                     )}
                   </div>
-                  <div className="flex gap-0.5 shrink-0 mt-1">
+                  <div className="flex items-center gap-1.5 shrink-0 mt-1">
+                    {grouped && (
+                      <span className="text-[10px] leading-none text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity tabular-nums">
+                        {formatShortTime(msg.timestamp)}
+                      </span>
+                    )}
                     <button
                       onClick={() => startReply(msg)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground cursor-pointer"
